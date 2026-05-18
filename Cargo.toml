@@ -1,0 +1,42 @@
+[package]
+name = "esp-csi-egui"
+version = "0.1.0"
+edition = "2024"
+description = "egui-based GUI for esp-csi-cli-rs firmware (port of esp-csi-tui-rs)"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+rerun = ["dep:rerun"]
+
+[dependencies]
+eframe = { version = "0.28", default-features = false, features = [
+    "default_fonts",
+    "glow",
+    "persistence",
+    "wayland",
+    "x11",
+] }
+egui = "0.28"
+egui_plot = "0.28"
+
+serialport = "4.3"
+postcard = { version = "1.0", default-features = false, features = ["use-std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+csv = "1.3"
+
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+log = "0.4"
+env_logger = "0.11"
+regex = "1"
+anyhow = "1"
+thiserror = "1"
+
+rerun = { version = "0.32", optional = true, default-features = false, features = ["sdk"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
