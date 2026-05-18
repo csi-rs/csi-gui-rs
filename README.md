@@ -2,7 +2,11 @@
 
 **A high-resolution desktop GUI for live ESP32 Wi-Fi Channel-State-Information (CSI) capture and analysis.**
 
+![csi-gui-rs preview](images/gui-preview.png)
+
 Plug an ESP32 running [`esp-csi-cli-rs`](https://github.com/connectedmotion-io/esp-csi-cli-rs) into your laptop, run `csi-gui-rs`, and watch the radio channel in real time — magnitude, phase, I/Q scatter, channel impulse response, a phase-Δ spectrogram, and a long-window CSI evolution curve — all updating live, all scrubbable, and exportable to **CSV / JSONL / Parquet** or [Rerun](https://rerun.io) RRD for offline work. Previously-exported captures can be imported back into the GUI for replay.
+
+The preview above is what `Load Template → showcase` opens — five panes covering Magnitude / Phase heatmaps, Spectrogram, Dashboard, and Evolution.
 
 ---
 

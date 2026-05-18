@@ -9,6 +9,17 @@ repository = "https://github.com/csi-rs/csi-gui-rs"
 readme = "README.md"
 keywords = ["csi", "esp32", "wifi", "egui", "visualization"]
 categories = ["visualization", "embedded", "hardware-support"]
+# README screenshots live in `images/` (repo root) so the GitHub
+# front-page renders them, but they shouldn't bloat the crate tarball
+# published to crates.io. `assets/fonts/` stays — Adwaita Sans is
+# baked into the binary via include_bytes!. `exports/` is the runtime
+# capture dir and is in .gitignore but Cargo would otherwise package
+# it if it ever ended up tracked.
+exclude = [
+    "images/**",
+    "exports/**",
+    ".github/**",
+]
 
 [features]
 default = []

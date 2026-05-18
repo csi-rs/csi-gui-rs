@@ -548,6 +548,41 @@ pub fn import_history_json(path: &Path) -> std::io::Result<Vec<crate::data::CsiD
 }
 
 #[cfg(test)]
+mod showcase_template_tests {
+    use super::*;
+
+    /// Make sure the bundled `templates/showcase.json` keeps parsing
+    /// through the current `Template` schema — if a future refactor
+    /// renames a serde tag or adds a required field, this catches it
+    /// before the binary tries to load the file at startup.
+    #[test]
+    fn bundled_showcase_template_parses() {
+        let root =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("templates/showcase.json");
+        if !root.exists() {
+            return; // No-op when running tests from a non-repo checkout.
+        }
+        let tpl = read_template(&root).expect("showcase.json must parse");
+        // Sanity: layout has five panes (Magnitude / Phase /
+        // Dashboard / Spectrogram / Evolution).
+        let mut ids = Vec::new();
+        tpl.tiling.root.collect_panes(&mut ids);
+        assert_eq!(
+            ids.len(),
+            5,
+            "showcase template should have 5 panes, found {ids:?}"
+        );
+        // Sanity: per-pane state matches each pane id.
+        for id in &ids {
+            assert!(
+                tpl.view_states.per_pane.contains_key(id),
+                "missing view_state for pane #{id}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod export_roundtrip_tests {
     use super::*;
     use crate::data::CsiData;
