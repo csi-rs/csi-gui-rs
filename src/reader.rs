@@ -96,9 +96,9 @@ pub struct ReaderHandles {
 ///
 /// ```no_run
 /// # use std::sync::Arc;
-/// # use esp_csi_egui::console::RawConsole;
-/// # use esp_csi_egui::reader::spawn_reader;
-/// # use esp_csi_egui::shared::EspSharedState;
+/// # use csi_gui_rs::console::RawConsole;
+/// # use csi_gui_rs::reader::spawn_reader;
+/// # use csi_gui_rs::shared::EspSharedState;
 /// let shared = EspSharedState::handle();
 /// let console = Arc::new(RawConsole::new(2_000));
 /// let handles = spawn_reader(shared, console);

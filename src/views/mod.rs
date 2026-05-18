@@ -20,17 +20,29 @@
 //! - [`replay`] — timeline scrubber + play/pause that drives the global
 //!   [`ReplayState`].
 
+/// Colormaps shared by every heatmap pane.
 pub mod colormap;
+/// Raw UART text pane.
 pub mod console;
+/// Firmware/PPS/SNR/RSSI overview pane.
 pub mod dashboard;
+/// Long-window per-packet scalar-over-time pane.
 pub mod evolution;
+/// Channel impulse response pane (IDFT).
 pub mod isometric;
+/// `|H(k)|` vs subcarrier pane.
 pub mod magnitude;
+/// `∠H(k)` vs subcarrier pane.
 pub mod phase;
+/// Polar amplitude pane.
 pub mod polar;
+/// I/Q scatter pane.
 pub mod raw_scatter;
+/// Global replay scrubber pane.
 pub mod replay;
+/// Subcarrier × time heatmap pane.
 pub mod spectrogram;
+/// Per-pane persisted view knobs.
 pub mod view_state;
 
 use crate::console::RawConsole;
@@ -134,17 +146,23 @@ pub fn subcarrier_x_bounds(n: usize) -> (f64, f64) {
     (-half, (n - 1) as f64 - half)
 }
 
+/// Container of per-pane [`ViewState`] keyed by pane id.
 #[derive(Default)]
 pub struct ViewStates {
+    /// One `ViewState` per layout pane id.
     pub per_pane: HashMap<usize, ViewState>,
 }
 
 impl ViewStates {
+    /// Fetch the [`ViewState`] for `pane_id`, inserting the default
+    /// when the pane is new.
     pub fn get_or_default(&mut self, pane_id: usize) -> &mut ViewState {
         self.per_pane.entry(pane_id).or_default()
     }
 }
 
+/// Dispatch to the renderer for `view`. Called by `App::render_pane` once
+/// per visible pane every frame.
 pub fn render_view(view: ViewType, ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     match view {
         ViewType::Empty => empty(ui),

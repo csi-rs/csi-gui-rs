@@ -4,6 +4,7 @@ use egui::Color32;
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoints, Polygon, VLine};
 use std::f32::consts::PI;
 
+/// How the Phase pane preprocesses `∠H(k)` before plotting.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum PhaseMode {
     /// Raw `atan2(Q, I)` in (-π, π]. Has visible 2π jumps.
@@ -18,6 +19,7 @@ pub enum PhaseMode {
     Detrended,
 }
 
+/// How the Phase pane visualizes the window of recent packets.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum PhaseDisplay {
     /// One line per packet, colored by age.
@@ -33,6 +35,8 @@ pub enum PhaseDisplay {
     Heatmap,
 }
 
+/// Render the Phase pane: per-packet `∠H(k)` traces, mean envelope,
+/// or subcarrier × time heatmap of the chosen [`PhaseMode`].
 pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     title_bar(ui, "Phase vs subcarrier", ctx);
 
@@ -161,15 +165,15 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     }
 
     plot.show(ui, |plot_ui| {
-        plot_ui.vline(VLine::new(0.0).color(Color32::from_gray(70)).name("DC"));
+        plot_ui.vline(VLine::new("DC", 0.0).color(Color32::from_gray(70)));
         match mode {
             PhaseMode::Raw => {
-                plot_ui.hline(HLine::new(0.0).color(Color32::from_gray(80)));
-                plot_ui.hline(HLine::new(PI as f64).color(Color32::from_gray(60)));
-                plot_ui.hline(HLine::new(-PI as f64).color(Color32::from_gray(60)));
+                plot_ui.hline(HLine::new("", 0.0).color(Color32::from_gray(80)));
+                plot_ui.hline(HLine::new("", PI as f64).color(Color32::from_gray(60)));
+                plot_ui.hline(HLine::new("", -PI as f64).color(Color32::from_gray(60)));
             }
             _ => {
-                plot_ui.hline(HLine::new(0.0).color(Color32::from_gray(80)));
+                plot_ui.hline(HLine::new("", 0.0).color(Color32::from_gray(80)));
             }
         }
 
@@ -184,7 +188,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                         .map(|(k, y)| [subcarrier_x(k, subcarriers), *y as f64])
                         .collect();
                     let name = if age == 0 { "latest" } else { "" };
-                    plot_ui.line(Line::new(pts).color(age_color(age, n)).name(name));
+                    plot_ui.line(Line::new(name, pts).color(age_color(age, n)));
                 }
             }
             PhaseDisplay::MeanEnvelope => {
@@ -198,10 +202,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                         .map(|k| [subcarrier_x(k, subcarriers), (mean[k] - std[k]) as f64]),
                 );
                 plot_ui.polygon(
-                    Polygon::new(PlotPoints::from(poly_pts))
+                    Polygon::new("±1σ", PlotPoints::from(poly_pts))
                         .fill_color(Color32::from_rgba_premultiplied(80, 130, 200, 50))
-                        .stroke((0.0, Color32::TRANSPARENT))
-                        .name("±1σ"),
+                        .stroke((0.0, Color32::TRANSPARENT)),
                 );
                 let mean_pts: PlotPoints = mean
                     .iter()
@@ -209,10 +212,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     .map(|(k, y)| [subcarrier_x(k, subcarriers), *y as f64])
                     .collect();
                 plot_ui.line(
-                    Line::new(mean_pts)
+                    Line::new("mean", mean_pts)
                         .color(Color32::from_rgb(110, 200, 255))
-                        .width(1.8)
-                        .name("mean"),
+                        .width(1.8),
                 );
             }
             // Handled above; left here so adding a new variant fails to
@@ -286,7 +288,7 @@ fn render_heatmap(
                         [x, y + 1.0],
                     ]
                     .into();
-                    plot_ui.polygon(Polygon::new(cell).fill_color(color).stroke((0.0, color)));
+                    plot_ui.polygon(Polygon::new("", cell).fill_color(color).stroke((0.0, color)));
                 }
             }
         });

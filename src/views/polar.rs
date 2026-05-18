@@ -44,7 +44,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     })
                     .collect();
                 plot_ui.line(
-                    Line::new(ring)
+                    Line::new("", ring)
                         .color(Color32::from_gray(80))
                         .width(0.5),
                 );
@@ -62,13 +62,12 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                 pts.push(first);
             }
             plot_ui.line(
-                Line::new(PlotPoints::from(pts.clone()))
+                Line::new("|H(k)|", PlotPoints::from(pts.clone()))
                     .color(Color32::from_rgb(110, 200, 255))
-                    .width(1.6)
-                    .name("|H(k)|"),
+                    .width(1.6),
             );
             plot_ui.points(
-                Points::new(PlotPoints::from(pts))
+                Points::new("", PlotPoints::from(pts))
                     .color(Color32::from_rgb(110, 200, 255))
                     .radius(2.0),
             );

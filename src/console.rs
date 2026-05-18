@@ -17,7 +17,7 @@ use std::time::Instant;
 ///
 /// ```
 /// use std::sync::Arc;
-/// use esp_csi_egui::console::RawConsole;
+/// use csi_gui_rs::console::RawConsole;
 ///
 /// let console = Arc::new(RawConsole::new(1024));
 /// console.push("hello");

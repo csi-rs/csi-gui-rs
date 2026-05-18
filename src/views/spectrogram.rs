@@ -3,10 +3,13 @@ use super::{subcarrier_x_bounds, title_bar, ViewCtx};
 use egui_plot::{Plot, PlotPoints, Polygon};
 use std::f32::consts::PI;
 
+/// What the Spectrogram pane colormaps each cell on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SpectrogramMetric {
+    /// `|Δφ|` between consecutive packets (motion-sensitive).
     #[default]
     PhaseDelta,
+    /// Per-cell `|H(k)|` amplitude (channel-strength-sensitive).
     Amplitude,
 }
 
@@ -158,7 +161,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                         [x, y + 1.0],
                     ]
                     .into();
-                    plot_ui.polygon(Polygon::new(cell).fill_color(color).stroke((0.0, color)));
+                    plot_ui.polygon(Polygon::new("", cell).fill_color(color).stroke((0.0, color)));
                 }
             }
         });

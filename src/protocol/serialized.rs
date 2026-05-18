@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// postcard). Wrapped in `Option<…>` on the wire, so a `None` is a
 /// single `0x00` byte at that field position.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(missing_docs)] // each field maps 1:1 to esp_csi_rs::time::DateTime
 pub struct DateTimeWire {
     pub year: u64,
     pub month: u64,
@@ -24,10 +25,12 @@ pub struct DateTimeWire {
 }
 
 /// Mirror of `esp_csi_rs::csi::RxCSIFmt`. `#[repr(u8)]` enum → one byte
-/// on the wire (discriminant only; no fields).
+/// on the wire (discriminant only; no fields). See the firmware's
+/// `RxCSIFmt` documentation for the secondary-channel × signal-mode ×
+/// bandwidth × STBC encoding behind each variant.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[repr(u8)]
-#[allow(dead_code)]
+#[allow(dead_code, missing_docs)]
 pub enum RxCsiFmtWire {
     Bw20 = 0,
     HtBw20 = 1,
@@ -47,8 +50,11 @@ pub enum RxCsiFmtWire {
 
 /// Classic-chip `CSIDataPacket` mirror — field declaration order
 /// matches `esp_csi_rs::csi::CSIDataPacket` (the non-`esp32c5`,
-/// non-`esp32c6` cfg branch).
+/// non-`esp32c6` cfg branch). Field semantics are the firmware's;
+/// see [the upstream
+/// reference](https://docs.rs/esp-csi-rs/latest/esp_csi_rs/csi/struct.CSIDataPacket.html).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(missing_docs)]
 pub struct CsiPacketClassic {
     pub mac: [u8; 6],
     pub rssi: i32,
@@ -108,8 +114,10 @@ impl From<CsiPacketClassic> for CsiData {
     }
 }
 
-/// ESP32-C5 `CSIDataPacket` mirror.
+/// ESP32-C5 `CSIDataPacket` mirror. See the firmware's HE-chip
+/// `CSIDataPacket` for field semantics.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(missing_docs)]
 pub struct CsiPacketHeC5 {
     pub mac: [u8; 6],
     pub rssi: i32,
@@ -140,6 +148,7 @@ pub struct CsiPacketHeC5 {
 /// `cur_single_mpdu` after `dump_len`, and `rxmatch0` after
 /// `rxmatch1`, on top of the C5 layout.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[allow(missing_docs)]
 pub struct CsiPacketHeC6 {
     pub mac: [u8; 6],
     pub rssi: i32,
@@ -249,8 +258,8 @@ fn format_mac(b: &[u8; 6]) -> String {
 /// default `fmt::Write::write_char` which UTF-8-encodes the char, so
 /// every byte ≥ 0x80 leaves the device as a 2-byte sequence
 /// (`0xC2 X` for `0x80..=0xBF`, `0xC3 X` for `0xC0..=0xFF`). We invert
-/// that mapping with [`un_utf8`] before handing the bytes to the
-/// COBS decoder.
+/// that mapping (see `un_utf8` in this module) before handing the
+/// bytes to the COBS decoder.
 pub fn decode_cobs_packet(frame: &[u8]) -> Option<CsiData> {
     let unmangled = un_utf8(frame);
     let mut buf = vec![0u8; unmangled.len()];

@@ -1,7 +1,7 @@
-use esp_csi_egui::app::App;
-use esp_csi_egui::data::DEFAULT_HISTORY_CAP;
-use esp_csi_egui::rerun_sink::Transport;
-use esp_csi_egui::shared::DEFAULT_BAUD;
+use csi_gui_rs::app::App;
+use csi_gui_rs::data::DEFAULT_HISTORY_CAP;
+use csi_gui_rs::rerun_sink::Transport;
+use csi_gui_rs::shared::DEFAULT_BAUD;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result<()> {
@@ -25,13 +25,13 @@ fn main() -> eframe::Result<()> {
 
     let native = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("esp-csi-egui")
+            .with_title("csi-gui-rs")
             .with_inner_size([1280.0, 800.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "esp-csi-egui",
+        "csi-gui-rs",
         native,
         Box::new(move |cc| {
             Ok(Box::new(App::new(
@@ -51,7 +51,7 @@ struct CliArgs {
 }
 
 fn print_usage() {
-    eprintln!("usage: esp-csi-egui [options]");
+    eprintln!("usage: csi-gui-rs [options]");
     eprintln!();
     eprintln!("options:");
     eprintln!("  --baud=N | -b N           serial baud rate (default {DEFAULT_BAUD})");

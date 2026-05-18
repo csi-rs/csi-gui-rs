@@ -115,10 +115,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                 let color = bucket_color(b, AGE_BUCKETS);
                 let name = if b == 0 { "newest" } else { "" };
                 plot_ui.points(
-                    Points::new(PlotPoints::from(pts))
+                    Points::new(name, PlotPoints::from(pts))
                         .color(color)
-                        .radius(1.6)
-                        .name(name),
+                        .radius(1.6),
                 );
             }
         });

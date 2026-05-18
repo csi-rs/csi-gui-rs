@@ -1,6 +1,8 @@
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use std::sync::atomic::Ordering;
 
+/// Render the Dashboard pane: firmware/protocol header, connection
+/// state, PPS/SNR/RSSI gauges, and the latest packet's MAC + timestamp.
 pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     title_bar(ui, "Dashboard", ctx);
 

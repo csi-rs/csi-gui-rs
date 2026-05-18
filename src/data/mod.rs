@@ -9,11 +9,15 @@
 //! - [`dsp`] — shared DSP helpers (`compute_cir`, `phase_to_rgba`) usable
 //!   by both the in-process views and the Rerun sink.
 
+/// Per-packet CSI representation. See [`csi::CsiData`].
 pub mod csi;
+/// Shared DSP helpers (`compute_cir`, `phase_to_rgba`, …).
 pub mod dsp;
+/// Bounded history ring buffer keyed by per-tick id.
 pub mod history;
+/// Per-tick aggregate stats (PPS, RSSI, SNR, …).
 pub mod stats;
 
 pub use csi::CsiData;
-pub use history::{History, DEFAULT_HISTORY_CAP};
+pub use history::{DEFAULT_HISTORY_CAP, History};
 pub use stats::NetworkStats;

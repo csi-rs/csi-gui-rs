@@ -32,7 +32,7 @@ pub const PPS_WINDOW_TICKS: usize = 10;
 /// # Example
 ///
 /// ```
-/// use esp_csi_egui::data::{CsiData, History};
+/// use csi_gui_rs::data::{CsiData, History};
 ///
 /// let mut h = History::with_capacity(1_000);
 /// let mut pkt = CsiData::default();

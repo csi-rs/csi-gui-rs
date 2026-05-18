@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 /// # Example
 ///
 /// ```
-/// use esp_csi_egui::data::CsiData;
+/// use csi_gui_rs::data::CsiData;
 ///
 /// let pkt = CsiData {
 ///     csi_raw_data: vec![10, 0, -5, 3, 7, -2],
@@ -41,28 +41,56 @@ use serde::{Deserialize, Serialize};
 /// ```
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CsiData {
+    /// Source MAC address as `XX:XX:XX:XX:XX:XX` (uppercase hex).
     pub mac: String,
+    /// Received signal strength indicator, in dBm.
     pub rssi: i32,
+    /// PHY rate index reported by the firmware (only meaningful for
+    /// legacy non-HT frames).
     pub rate: u32,
+    /// RF noise floor, in dBm.
     pub noise_floor: i32,
+    /// Primary channel the packet was captured on.
     pub channel: u32,
+    /// Local timestamp in microseconds (firmware-relative clock, not
+    /// wall-clock).
     pub timestamp: u64,
+    /// Packet length including the FCS.
     pub sig_len: u32,
+    /// Receive-state code. `0` = no error.
     pub rx_state: u32,
+    /// Secondary channel: `0` = none, `1` = above, `2` = below.
     pub secondary_channel: u32,
+    /// Guard interval: `0` = long GI, `1` = short GI.
     pub sgi: u32,
+    /// Antenna index that captured this packet.
     pub ant: u32,
+    /// Number of subframes aggregated into the parent A-MPDU.
     pub ampdu_cnt: u32,
+    /// Signal mode: `0` = non-HT, `1` = HT (11n), `3` = VHT (11ac).
     pub sig_mode: u32,
+    /// Modulation Coding Scheme index.
     pub mcs: u32,
+    /// Channel bandwidth: `0` = 20 MHz, `1` = 40 MHz.
     pub cwb: u32,
+    /// Channel-estimate smoothing recommendation: `1` = smooth across
+    /// subcarriers, `0` = per-subcarrier independent.
     pub smoothing: u32,
+    /// `0` indicates a sounding PPDU.
     pub not_sounding: u32,
+    /// `0` = MPDU, `1` = AMPDU.
     pub aggregation: u32,
+    /// `1` for STBC-encoded packets.
     pub stbc: u32,
+    /// `1` for 11n LDPC-coded packets.
     pub fec_coding: u32,
+    /// Reserved for the legacy text-format's duplicated `sig_len` slot;
+    /// always zero from the binary decoders.
     pub sig_len_extra: u32,
+    /// Length of `csi_raw_data` in bytes (matches `csi_raw_data.len()`).
     pub data_length: u32,
+    /// Interleaved I/Q samples, `[I0, Q0, I1, Q1, …]`. Empty when the
+    /// packet was metadata-only (parser failure or undecoded).
     pub csi_raw_data: Vec<i32>,
 }
 

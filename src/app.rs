@@ -124,6 +124,13 @@ impl App {
     }
 
     fn pump_reader(&mut self) {
+        // Track the pre-drain state so we can detect a fresh entry into
+        // `Streaming` and push the full config to the device — the
+        // firmware's default `LogMode` is `ArrayList`, the GUI's default
+        // is `Serialized`, and without an explicit sync the two sides
+        // disagree until the user opens the config overlay and clicks
+        // Apply.
+        let prev_state = self.conn_state.clone();
         while let Ok(s) = self.reader.state.try_recv() {
             if self.conn_state != s {
                 self.firmware_warning_dismissed = false;
@@ -132,6 +139,11 @@ impl App {
         }
         while let Ok(info) = self.reader.info.try_recv() {
             self.device = Some(info);
+        }
+        if !matches!(prev_state, ConnState::Streaming)
+            && matches!(self.conn_state, ConnState::Streaming)
+        {
+            self.flush_config_to_device();
         }
 
         if self.last_port_scan.elapsed() > Duration::from_secs(2) {
@@ -183,6 +195,37 @@ impl App {
             self.replay.anchor = Some(next.max(first));
         }
         self.replay.last_advance = Instant::now();
+    }
+
+    /// Push the entire `config_overlay.cfg` to the device via
+    /// `EspCommand::ApplyConfig`. Called automatically on every
+    /// transition into [`ConnState::Streaming`] so the firmware's
+    /// runtime state matches the GUI's view from the first packet —
+    /// otherwise the firmware boots in its own defaults (`LogMode::ArrayList`,
+    /// etc.) and the GUI parses the wrong wire format until the user
+    /// clicks Apply.
+    fn flush_config_to_device(&mut self) {
+        if let Some(info) = self.device.as_ref() {
+            let cfg = self.config_overlay.cfg.clone();
+            let _ = self.reader.commands.send(EspCommand::ApplyConfig {
+                cfg,
+                chip: info.chip,
+            });
+        }
+    }
+
+    /// `true` when the reader has identified an ESP32 running a supported
+    /// `esp-csi-cli-rs` build. Used to gate "Start Collection" so the user
+    /// can't kick a session off against an absent or unrecognised device.
+    /// Stop is always allowed (so the local "collecting" state can be
+    /// cleared even if connectivity changes mid-session).
+    fn is_device_ready(&self) -> bool {
+        matches!(self.conn_state, ConnState::Streaming)
+            && self
+                .device
+                .as_ref()
+                .map(|d| d.protocol_supported())
+                .unwrap_or(false)
     }
 
     fn cycle_theme(&mut self, ctx: &egui::Context) {
@@ -345,8 +388,9 @@ impl App {
         self.help.show(ctx);
 
         let is_collecting = self.shared.is_collecting.load(Ordering::Acquire);
+        let device_ready = self.is_device_ready();
 
-        if let Some(item) = self.main_menu.show(ctx, is_collecting) {
+        if let Some(item) = self.main_menu.show(ctx, is_collecting, device_ready) {
             match item {
                 MainMenuItem::Theme => self.cycle_theme(ctx),
                 MainMenuItem::SaveTemplate => {
@@ -376,7 +420,7 @@ impl App {
                     if is_collecting {
                         let _ = self.reader.commands.send(EspCommand::Stop);
                         self.rerun.mark_session_boundary();
-                    } else {
+                    } else if device_ready {
                         let dur = self.config_overlay.cfg.start_duration_sec;
                         let _ = self
                             .reader
@@ -502,12 +546,12 @@ impl App {
                         let right =
                             egui::Rect::from_min_max(egui::pos2(split, rect.top()), rect.max);
                         if let Some(c) = children.first() {
-                            ui.allocate_ui_at_rect(left, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                                 self.render_node(ui, c);
                             });
                         }
                         if let Some(c) = children.get(1) {
-                            ui.allocate_ui_at_rect(right, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
                                 self.render_node(ui, c);
                             });
                         }
@@ -519,12 +563,12 @@ impl App {
                         let bot =
                             egui::Rect::from_min_max(egui::pos2(rect.left(), split), rect.max);
                         if let Some(c) = children.first() {
-                            ui.allocate_ui_at_rect(top, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(top), |ui| {
                                 self.render_node(ui, c);
                             });
                         }
                         if let Some(c) = children.get(1) {
-                            ui.allocate_ui_at_rect(bot, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(bot), |ui| {
                                 self.render_node(ui, c);
                             });
                         }
@@ -536,31 +580,31 @@ impl App {
 
     fn render_menu_bar(&mut self, ui: &mut egui::Ui) {
         let is_collecting = self.shared.is_collecting.load(Ordering::Acquire);
-        egui::menu::bar(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button("Save Template…").clicked() {
                     self.text_prompt.open = true;
                     self.text_prompt.title = "Save Template".into();
                     self.text_prompt.label = "Template name:".into();
                     self.text_prompt.purpose = TextPromptPurpose::SaveTemplate;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Load Template…").clicked() {
                     self.template_picker.open = true;
                     self.template_picker.refresh();
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Export Data…").clicked() {
                     self.text_prompt.open = true;
                     self.text_prompt.title = "Export Data".into();
                     self.text_prompt.label = "Export name (timestamp appended):".into();
                     self.text_prompt.purpose = TextPromptPurpose::ExportData;
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Quit").clicked() {
                     self.quit_confirm_open = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -586,7 +630,7 @@ impl App {
                                     .commands
                                     .send(EspCommand::OpenPort(port));
                                 self.firmware_warning_dismissed = false;
-                                ui.close_menu();
+                                ui.close();
                             }
                         }
                     }
@@ -597,20 +641,20 @@ impl App {
                 });
                 if ui.button("Reset Device (DTR/RTS)").clicked() {
                     let _ = self.reader.commands.send(EspCommand::Reset);
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Configure…").clicked() {
                     self.config_overlay.open = true;
                     self.config_overlay.is_collecting = is_collecting;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Reset Config to defaults").clicked() {
                     let _ = self
                         .reader
                         .commands
                         .send(EspCommand::Raw("reset-config".into()));
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 let start_label = if is_collecting {
@@ -618,7 +662,17 @@ impl App {
                 } else {
                     "Start Collection"
                 };
-                if ui.button(start_label).clicked() {
+                let device_ready = self.is_device_ready();
+                let start_enabled = is_collecting || device_ready;
+                let resp = ui.add_enabled(start_enabled, egui::Button::new(start_label));
+                let resp = if !start_enabled {
+                    resp.on_disabled_hover_text(
+                        "Connect an ESP32 running esp-csi-cli-rs firmware first.",
+                    )
+                } else {
+                    resp
+                };
+                if resp.clicked() {
                     if is_collecting {
                         let _ = self.reader.commands.send(EspCommand::Stop);
                     } else {
@@ -629,7 +683,7 @@ impl App {
                             .send(EspCommand::Start { duration_sec: dur });
                     }
                     self.rerun.mark_session_boundary();
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("show-config (raw)").clicked() {
@@ -637,47 +691,47 @@ impl App {
                         .reader
                         .commands
                         .send(EspCommand::Raw("show-config".into()));
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("show-stats (raw)").clicked() {
                     let _ = self
                         .reader
                         .commands
                         .send(EspCommand::Raw("show-stats".into()));
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("info (raw)").clicked() {
                     let _ = self.reader.commands.send(EspCommand::Raw("info".into()));
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
             ui.menu_button("View", |ui| {
                 if ui.button("Cycle Theme").clicked() {
                     self.pending_theme_cycle = true;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Select View…").clicked() {
                     self.view_selector.open = true;
                     self.view_selector.selected = 0;
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Fullscreen Focused").clicked() {
                     self.tiling.toggle_fullscreen();
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Split Horizontal").clicked() {
                     self.tiling.split(SplitDirection::Horizontal);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Split Vertical").clicked() {
                     self.tiling.split(SplitDirection::Vertical);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Close Focused Pane").clicked() {
                     self.tiling.close_focused();
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -694,7 +748,7 @@ impl App {
                     .clicked()
                 {
                     self.rerun.set_transport(Transport::Off);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui
                     .selectable_label(
@@ -704,7 +758,7 @@ impl App {
                     .clicked()
                 {
                     self.rerun.set_transport(Transport::Spawn);
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Connect to viewer…").clicked() {
                     self.text_prompt.open = true;
@@ -712,7 +766,7 @@ impl App {
                     self.text_prompt.label = "host:port (default 127.0.0.1:9876):".into();
                     self.text_prompt.buffer = "127.0.0.1:9876".into();
                     self.text_prompt.purpose = TextPromptPurpose::RerunConnect;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Record to file…").clicked() {
                     self.text_prompt.open = true;
@@ -720,7 +774,7 @@ impl App {
                     self.text_prompt.label = "filename (relative to logs/):".into();
                     self.text_prompt.buffer = String::new();
                     self.text_prompt.purpose = TextPromptPurpose::RerunFile;
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 let live = self.rerun.is_live();
@@ -729,7 +783,7 @@ impl App {
                     .clicked()
                 {
                     self.rerun.toggle_live();
-                    ui.close_menu();
+                    ui.close();
                 }
                 let rec = self.rerun.is_recording();
                 if ui
@@ -737,7 +791,7 @@ impl App {
                     .clicked()
                 {
                     self.rerun.toggle_rrd();
-                    ui.close_menu();
+                    ui.close();
                 }
                 ui.separator();
                 if ui.button("Export history to RRD…").clicked() {
@@ -746,7 +800,7 @@ impl App {
                     self.text_prompt.label = "filename (relative to exports/):".into();
                     self.text_prompt.buffer = String::new();
                     self.text_prompt.purpose = TextPromptPurpose::RerunExport;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if let Some(err) = self.rerun.last_error() {
                     ui.separator();
@@ -757,11 +811,11 @@ impl App {
             ui.menu_button("Help", |ui| {
                 if ui.button("Keyboard Shortcuts").clicked() {
                     self.help.open = true;
-                    ui.close_menu();
+                    ui.close();
                 }
                 if ui.button("Main Menu (M)").clicked() {
                     self.main_menu.open = true;
-                    ui.close_menu();
+                    ui.close();
                 }
             });
 
@@ -961,7 +1015,7 @@ impl App {
         };
         egui::Frame::default()
             .stroke(egui::Stroke::new(if focused { 2.0 } else { 1.0 }, border_color))
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 let resp = ui.interact(
                     ui.available_rect_before_wrap(),
@@ -998,19 +1052,23 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // eframe 0.34 swapped `App::update(ctx)` → `App::ui(ui)`. Overlays,
+        // keys, viewport commands, and the repaint scheduler still want a
+        // `&Context`; panels now want a `&mut Ui` via `show_inside`.
+        let ctx = ui.ctx().clone();
         self.pump_reader();
-        self.handle_overlays(ctx);
-        self.render_firmware_warning(ctx);
-        self.handle_keys(ctx);
+        self.handle_overlays(&ctx);
+        self.render_firmware_warning(&ctx);
+        self.handle_keys(&ctx);
 
-        egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+        egui::Panel::top("menu_bar").show_inside(ui, |ui| {
             self.render_menu_bar(ui);
         });
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
             self.render_status_bar(ui);
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             self.render_tree(ui);
         });
 

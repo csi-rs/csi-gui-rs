@@ -1,5 +1,8 @@
-use crate::views::{title_bar, ViewCtx};
+use crate::views::{ViewCtx, title_bar};
 
+/// Render the Console pane: tail of raw UART text captured by the
+/// reader thread. Optional auto-scroll follows the head as new lines
+/// arrive.
 pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     title_bar(ui, "Console (raw serial)", ctx);
 

@@ -49,11 +49,27 @@ pub struct MainMenu {
 }
 
 impl MainMenu {
-    pub fn show(&mut self, ctx: &egui::Context, is_collecting: bool) -> Option<MainMenuItem> {
+    /// Render the main menu window.
+    ///
+    /// `is_collecting` flips the Start/Stop label. `start_enabled` gates
+    /// the Start/Stop row when no esp-csi-cli-rs firmware is identified —
+    /// while collecting the row stays enabled (so the user can still
+    /// Stop), but Start is disabled offline. Keyboard `Enter` and the
+    /// arrow keys honour the same gate.
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        is_collecting: bool,
+        start_enabled: bool,
+    ) -> Option<MainMenuItem> {
         if !self.open {
             return None;
         }
         let mut chosen = None;
+        let is_enabled = |item: MainMenuItem| match item {
+            MainMenuItem::StartStop => is_collecting || start_enabled,
+            _ => true,
+        };
         egui::Window::new("Main Menu")
             .collapsible(false)
             .resizable(false)
@@ -67,7 +83,16 @@ impl MainMenu {
                     } else {
                         egui::RichText::new(format!("  {label}"))
                     };
-                    if ui.button(text).clicked() {
+                    let enabled = is_enabled(*item);
+                    let resp = ui.add_enabled(enabled, egui::Button::new(text));
+                    let resp = if matches!(item, MainMenuItem::StartStop) && !enabled {
+                        resp.on_disabled_hover_text(
+                            "Connect an ESP32 running esp-csi-cli-rs firmware first.",
+                        )
+                    } else {
+                        resp
+                    };
+                    if resp.clicked() {
                         chosen = Some(*item);
                         self.open = false;
                     }
@@ -81,8 +106,11 @@ impl MainMenu {
                             (self.selected + MainMenuItem::ALL.len() - 1) % MainMenuItem::ALL.len();
                     }
                     if i.key_pressed(egui::Key::Enter) {
-                        chosen = Some(MainMenuItem::ALL[self.selected]);
-                        self.open = false;
+                        let item = MainMenuItem::ALL[self.selected];
+                        if is_enabled(item) {
+                            chosen = Some(item);
+                            self.open = false;
+                        }
                     }
                     if i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::M) {
                         self.open = false;

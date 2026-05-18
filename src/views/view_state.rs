@@ -9,33 +9,45 @@ use serde::{Deserialize, Serialize};
 /// so there is no camera/orbit state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewState {
+    /// Console pane: auto-scroll to the most recent line on every push.
     #[serde(default = "default_true")]
     pub console_autoscroll: bool,
 
+    /// I/Q-scatter pane: how many recent packets to overlay.
     #[serde(default = "default_iq_window")]
     pub iq_window: usize,
 
+    /// Spectrogram pane: number of packets along the time axis.
     #[serde(default = "default_spec_window")]
     pub spectrogram_window: usize,
+    /// Spectrogram pane: which metric is mapped to the colormap.
     #[serde(default, with = "spec_metric_serde")]
     pub spectrogram_metric: SpectrogramMetric,
 
+    /// Phase pane: window length for traces / mean / heatmap.
     #[serde(default = "default_phase_window")]
     pub phase_window: usize,
+    /// Phase pane: raw / unwrapped / detrended mode.
     #[serde(default, with = "phase_mode_serde")]
     pub phase_mode: PhaseMode,
+    /// Phase pane: line traces, mean envelope, or heatmap.
     #[serde(default, with = "phase_display_serde")]
     pub phase_display: PhaseDisplay,
 
+    /// Magnitude pane: window length for traces / mean / heatmap.
     #[serde(default = "default_magnitude_window")]
     pub magnitude_window: usize,
+    /// Magnitude pane: linear vs dB Y axis.
     #[serde(default, with = "magnitude_scale_serde")]
     pub magnitude_scale: MagnitudeScale,
+    /// Magnitude pane: line traces, mean envelope, or heatmap.
     #[serde(default, with = "magnitude_display_serde")]
     pub magnitude_display: MagnitudeDisplay,
 
+    /// Evolution pane: rolling window length (packets).
     #[serde(default = "default_evolution_window")]
     pub evolution_window: usize,
+    /// Evolution pane: which scalar to plot vs time.
     #[serde(default, with = "evolution_metric_serde")]
     pub evolution_metric: EvolutionMetric,
 }

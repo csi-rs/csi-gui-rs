@@ -49,7 +49,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     .collect();
                 let color = age_color(age, n);
                 let label = if age == 0 { "latest" } else { "" };
-                plot_ui.line(Line::new(pts).color(color).name(label));
+                plot_ui.line(Line::new(label, pts).color(color));
             }
         });
 }

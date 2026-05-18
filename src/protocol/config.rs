@@ -1,14 +1,26 @@
+//! Strongly-typed counterparts to the `set-*` family of CLI commands.
+//!
+//! The types here mirror the firmware's `UserConfig` surface and
+//! cycle/serialize/render-as-CLI on demand. They are the GUI's
+//! source-of-truth for what gets pushed to the device with `ApplyConfig`.
+
 use serde::{Deserialize, Serialize};
 
+/// Wi-Fi operating mode — what the firmware's PHY/MAC layer does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WifiMode {
+    /// Associate to an AP using the configured SSID/password.
     Station,
+    /// Promiscuous capture without association.
     Sniffer,
+    /// ESP-NOW initiator role.
     EspNowCentral,
+    /// ESP-NOW peripheral role.
     EspNowPeripheral,
 }
 
 impl WifiMode {
+    /// CLI token used by `set-wifi --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Station => "station",
@@ -17,6 +29,8 @@ impl WifiMode {
             Self::EspNowPeripheral => "esp-now-peripheral",
         }
     }
+    /// Round-robin to the next mode (used by the config overlay's
+    /// click-to-cycle button).
     pub fn cycle(self) -> Self {
         match self {
             Self::Sniffer => Self::Station,
@@ -27,19 +41,25 @@ impl WifiMode {
     }
 }
 
+/// Collection role: `Collector` actively generates traffic; `Listener`
+/// is passive receive-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CollectionMode {
+    /// Actively transmit traffic and capture CSI.
     Collector,
+    /// Passive: capture CSI without generating any traffic.
     Listener,
 }
 
 impl CollectionMode {
+    /// CLI token used by `set-collection-mode --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Collector => "collector",
             Self::Listener => "listener",
         }
     }
+    /// Round-robin to the other mode.
     pub fn cycle(self) -> Self {
         match self {
             Self::Collector => Self::Listener,
@@ -48,15 +68,24 @@ impl CollectionMode {
     }
 }
 
+/// Wire format the firmware emits CSI packets in. All four are
+/// decoded by the host; see [`crate::protocol::parse`] and
+/// [`crate::protocol::serialized`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LogMode {
+    /// COBS-framed `postcard` binary — preferred default; smallest on
+    /// the wire and structured.
     Serialized,
+    /// Human-readable `key: value` lines per packet.
     Text,
+    /// One-line nested-array per packet (CSV-ish).
     ArrayList,
+    /// Hernandez ESP32-CSI-Tool's 26-column CSV.
     EspCsiTool,
 }
 
 impl LogMode {
+    /// CLI token used by `set-log-mode --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Serialized => "serialized",
@@ -65,6 +94,7 @@ impl LogMode {
             Self::EspCsiTool => "esp-csi-tool",
         }
     }
+    /// Round-robin to the next mode.
     pub fn cycle(self) -> Self {
         match self {
             Self::Serialized => Self::Text,
@@ -73,6 +103,8 @@ impl LogMode {
             Self::EspCsiTool => Self::Serialized,
         }
     }
+    /// Internal `AtomicU8` tag the reader thread uses to pick a parser.
+    /// Not on the wire — used only between the UI and reader.
     pub fn id(self) -> u8 {
         match self {
             Self::Serialized => 0,
@@ -81,6 +113,9 @@ impl LogMode {
             Self::EspCsiTool => 3,
         }
     }
+    /// `true` when the host has a working decoder for this mode.
+    /// All four are supported today; the method is kept so the
+    /// status badge in the config overlay can stay generic.
     pub fn host_parses(self) -> bool {
         matches!(
             self,
@@ -89,14 +124,20 @@ impl LogMode {
     }
 }
 
+/// Whether (and how) the firmware delivers CSI from the Wi-Fi callback
+/// to its log path. `Off` suppresses CSI emission entirely.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CsiDelivery {
+    /// CSI emission disabled.
     Off,
+    /// Inline in the Wi-Fi callback (low latency, low DRAM).
     Callback,
+    /// Async over a bounded channel + dedicated drain task.
     Async,
 }
 
 impl CsiDelivery {
+    /// CLI token used by `set-csi-delivery --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Off => "off",
@@ -104,6 +145,7 @@ impl CsiDelivery {
             Self::Async => "async",
         }
     }
+    /// Round-robin to the next delivery mode.
     pub fn cycle(self) -> Self {
         match self {
             Self::Off => Self::Callback,
@@ -113,7 +155,13 @@ impl CsiDelivery {
     }
 }
 
+/// PHY rate the firmware uses when transmitting (only meaningful for
+/// `Collector` mode; ignored for `Listener`).
+///
+/// `RxxL` variants are 802.11b long-preamble; `Mcs*Lgi` / `Mcs*Sgi` are
+/// 802.11n MCS indices with long/short guard interval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(missing_docs)] // each variant maps 1:1 to a labelled CLI token
 pub enum PhyRate {
     R1m, R1mL, R2m, R5m5, R5m5L, R11m, R11mL,
     R6m, R9m, R12m, R18m, R24m, R36m, R48m, R54m,
@@ -122,6 +170,7 @@ pub enum PhyRate {
 }
 
 impl PhyRate {
+    /// Every variant in declaration order — used for round-robin cycling.
     pub const ALL: [PhyRate; 24] = [
         PhyRate::R1m, PhyRate::R1mL, PhyRate::R2m, PhyRate::R5m5, PhyRate::R5m5L,
         PhyRate::R11m, PhyRate::R11mL, PhyRate::R6m, PhyRate::R9m, PhyRate::R12m,
@@ -131,6 +180,7 @@ impl PhyRate {
         PhyRate::Mcs0Sgi,
     ];
 
+    /// CLI token used by `set-rate --rate=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::R1m => "1m", Self::R1mL => "1m-l", Self::R2m => "2m",
@@ -145,43 +195,78 @@ impl PhyRate {
             Self::Mcs0Sgi => "mcs0-sgi",
         }
     }
+    /// Round-robin to the next rate.
     pub fn cycle(self) -> Self {
         let i = Self::ALL.iter().position(|r| *r == self).unwrap_or(0);
         Self::ALL[(i + 1) % Self::ALL.len()]
     }
 }
 
+/// Full configuration pushed to the device by `EspCommand::ApplyConfig`.
+///
+/// Each field maps 1:1 to a `set-*` CLI command — see
+/// [`crate::protocol::command::render_apply_config`] for the exact
+/// rendering. Field grouping mirrors the config-overlay UI.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EspConfig {
+    /// Wi-Fi operating mode (`set-wifi --mode=…`).
     pub wifi_mode: WifiMode,
+    /// Primary channel (`set-wifi --set-channel=…`). Must satisfy
+    /// [`valid_channel`].
     pub channel: u8,
+    /// Station-mode SSID (`set-wifi --sta-ssid=…`). Max 32 bytes.
     pub sta_ssid: String,
+    /// Station-mode PSK (`set-wifi --sta-password=…`). Max 32 bytes.
     pub sta_password: String,
+    /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
     pub traffic_hz: u64,
+    /// Collector vs Listener role (`set-collection-mode`).
     pub collection_mode: CollectionMode,
+    /// Wire format for emitted CSI packets (`set-log-mode`).
     pub log_mode: LogMode,
+    /// PHY rate to transmit at (`set-rate`).
     pub phy_rate: PhyRate,
+    /// Spawn the TX task on `start` (`set-io-tasks --tx=…`).
     pub tx_task: bool,
+    /// Spawn the RX task on `start` (`set-io-tasks --rx=…`).
     pub rx_task: bool,
+    /// How CSI is delivered to the log path (`set-csi-delivery --mode=…`).
     pub csi_delivery: CsiDelivery,
+    /// Master switch for CSI logging (`set-csi-delivery --logging=…`).
     pub csi_logging: bool,
 
+    /// Classic chips: disable Legacy-LTF capture (`set-csi --disable-lltf`).
     pub classic_disable_lltf: bool,
+    /// Classic chips: disable HT-LTF capture (`--disable-htltf`).
     pub classic_disable_htltf: bool,
+    /// Classic chips: disable STBC-HT-LTF capture (`--disable-stbc-htltf`).
     pub classic_disable_stbc_htltf: bool,
+    /// Classic chips: disable LTF merging (`--disable-ltf-merge`).
     pub classic_disable_ltf_merge: bool,
 
+    /// ESP32-C5/C6: disable CSI entirely (`set-csi --disable-csi`).
     pub he_disable_csi: bool,
+    /// ESP32-C5/C6: disable legacy-format CSI (`--disable-csi-legacy`).
     pub he_disable_csi_legacy: bool,
+    /// ESP32-C5/C6: disable HT20 CSI (`--disable-csi-ht20`).
     pub he_disable_csi_ht20: bool,
+    /// ESP32-C5/C6: disable HT40 CSI (`--disable-csi-ht40`).
     pub he_disable_csi_ht40: bool,
+    /// ESP32-C5/C6: disable HE-SU CSI (`--disable-csi-su`).
     pub he_disable_csi_su: bool,
+    /// ESP32-C5/C6: disable HE-MU CSI (`--disable-csi-mu`).
     pub he_disable_csi_mu: bool,
+    /// ESP32-C5/C6: disable HE-DCM CSI (`--disable-csi-dcm`).
     pub he_disable_csi_dcm: bool,
+    /// ESP32-C5/C6: disable beamformed-CSI capture (`--disable-csi-beamformed`).
     pub he_disable_csi_beamformed: bool,
+    /// ESP32-C5/C6: STBC mode 0..=2 (`--csi-he-stbc=…`).
     pub he_stbc: u32,
+    /// ESP32-C5/C6: value-scale config 0..=3 (`--val-scale-cfg=…`).
     pub he_val_scale_cfg: u32,
 
+    /// Auto-stop after this many seconds (`start --duration=N`). `None`
+    /// means "run until user sends `q`".
     pub start_duration_sec: Option<u64>,
 }
 
@@ -194,7 +279,7 @@ impl Default for EspConfig {
             sta_password: String::new(),
             traffic_hz: 100,
             collection_mode: CollectionMode::Collector,
-            log_mode: LogMode::Text,
+            log_mode: LogMode::Serialized,
             phy_rate: PhyRate::Mcs0Lgi,
             tx_task: true,
             rx_task: true,
@@ -245,6 +330,9 @@ impl EspConfig {
     }
 }
 
+/// `true` when `c` is a 2.4 GHz (1..=14) or 5 GHz (UNII-1/2A/3) channel
+/// number the firmware will accept. Used to gate the channel-picker in
+/// the config overlay and to fail `EspConfig::validate` early.
 pub fn valid_channel(c: u8) -> bool {
     matches!(
         c,

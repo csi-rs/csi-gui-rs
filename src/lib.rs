@@ -1,4 +1,4 @@
-//! # esp-csi-egui
+//! # csi-gui-rs
 //!
 //! A desktop GUI library and binary for capturing, visualizing, and exporting
 //! Wi-Fi Channel-State-Information (CSI) packets emitted by ESP32 devices
@@ -6,7 +6,7 @@
 //!
 //! [`esp-csi-cli-rs`]: https://github.com/connectedmotion-io/esp-csi-cli-rs
 //!
-//! Most users only need the [`esp-csi-egui` binary](../esp-csi-egui/index.html);
+//! Most users only need the [`csi-gui-rs` binary](../csi-gui-rs/index.html);
 //! this library crate exists so the same building blocks (serial reader,
 //! parsers, history buffer, visualizations, Rerun sink, persistence) can be
 //! reused in other tools or wrapped in custom front-ends.
@@ -41,13 +41,13 @@
 //! The binary entry point parses CLI flags and starts the eframe app:
 //!
 //! ```no_run
-//! use esp_csi_egui::app::App;
-//! use esp_csi_egui::data::DEFAULT_HISTORY_CAP;
-//! use esp_csi_egui::rerun_sink::Transport;
-//! use esp_csi_egui::shared::DEFAULT_BAUD;
+//! use csi_gui_rs::app::App;
+//! use csi_gui_rs::data::DEFAULT_HISTORY_CAP;
+//! use csi_gui_rs::rerun_sink::Transport;
+//! use csi_gui_rs::shared::DEFAULT_BAUD;
 //!
 //! eframe::run_native(
-//!     "esp-csi-egui",
+//!     "csi-gui-rs",
 //!     eframe::NativeOptions::default(),
 //!     Box::new(|cc| {
 //!         Ok(Box::new(App::new(
@@ -67,10 +67,10 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use esp_csi_egui::console::RawConsole;
-//! use esp_csi_egui::protocol::command::EspCommand;
-//! use esp_csi_egui::reader::spawn_reader;
-//! use esp_csi_egui::shared::EspSharedState;
+//! use csi_gui_rs::console::RawConsole;
+//! use csi_gui_rs::protocol::command::EspCommand;
+//! use csi_gui_rs::reader::spawn_reader;
+//! use csi_gui_rs::shared::EspSharedState;
 //!
 //! let shared = EspSharedState::handle();
 //! let console = Arc::new(RawConsole::new(2_000));
@@ -107,7 +107,7 @@
 //! - [`data`] — in-memory CSI representation, ring-buffer history,
 //!   pre-computed per-tick stats, shared DSP helpers.
 //! - [`views`] — every visualization pane (Dashboard, Magnitude, Phase,
-//!   Polar, CIR, Spectrogram, I/Q Scatter, Console, Replay).
+//!   Polar, CIR, Spectrogram, Evolution, I/Q Scatter, Console, Replay).
 //! - [`layout`] — tiling pane manager and persistable layout tree.
 //! - [`persistence`] — JSON layout templates + CSV export of captured CSI.
 //! - [`rerun_sink`] — Rerun integration (Cargo feature `rerun`).

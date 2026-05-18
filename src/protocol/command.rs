@@ -7,11 +7,20 @@ pub enum EspCommand {
     /// Pulse DTR/RTS, re-banner, re-info.
     Reset,
     /// Begin collection (`start [--duration=<secs>]`). Locks the CLI.
-    Start { duration_sec: Option<u64> },
+    Start {
+        /// Auto-stop after `N` seconds. `None` runs until the user
+        /// sends [`EspCommand::Stop`].
+        duration_sec: Option<u64>,
+    },
     /// Stop collection (`q`).
     Stop,
     /// Apply the entire `set-*` surface. Ignored if `is_collecting`.
-    ApplyConfig { cfg: EspConfig, chip: ChipFamily },
+    ApplyConfig {
+        /// The new config — see [`crate::protocol::config::EspConfig`].
+        cfg: EspConfig,
+        /// Chip family (used to pick the right `set-csi` flag set).
+        chip: ChipFamily,
+    },
     /// Raw shell-out for advanced use (e.g. `show-config`).
     Raw(String),
     /// Open / re-open the named port.
@@ -109,6 +118,8 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     out
 }
 
+/// Render the `start` command line. `Some(N)` adds `--duration=N`;
+/// `None` returns just `"start"`.
 pub fn render_start(duration_sec: Option<u64>) -> String {
     match duration_sec {
         Some(d) => format!("start --duration={d}"),

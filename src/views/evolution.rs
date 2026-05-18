@@ -112,10 +112,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         .allow_boxed_zoom(true)
         .show(ui, |plot_ui| {
             plot_ui.line(
-                Line::new(pts)
+                Line::new(metric.label(), pts)
                     .color(Color32::from_rgb(110, 200, 255))
-                    .width(1.6)
-                    .name(metric.label()),
+                    .width(1.6),
             );
             // Horizontal-mean reference line via two-point polyline so
             // both axes stay finite under autoscale.
@@ -125,16 +124,14 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             ]
             .into();
             plot_ui.line(
-                Line::new(mean_pts)
+                Line::new("mean", mean_pts)
                     .color(Color32::from_gray(120))
-                    .width(0.8)
-                    .name("mean"),
+                    .width(0.8),
             );
             if let Some(anchor) = ctx.view_anchor() {
                 plot_ui.vline(
-                    VLine::new(anchor as f64)
-                        .color(Color32::from_rgb(220, 180, 60))
-                        .name("replay"),
+                    VLine::new("replay", anchor as f64)
+                        .color(Color32::from_rgb(220, 180, 60)),
                 );
             }
         });

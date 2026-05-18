@@ -80,7 +80,12 @@ where
                 map((t0 + t1) * 0.5),
             );
         }
-        painter.rect_stroke(rect, 1.0, egui::Stroke::new(0.5, Color32::from_gray(120)));
+        painter.rect_stroke(
+            rect,
+            1.0,
+            egui::Stroke::new(0.5, Color32::from_gray(120)),
+            egui::StrokeKind::Middle,
+        );
         resp
     }
 }

@@ -42,8 +42,8 @@
 //! # Example
 //!
 //! ```no_run
-//! use esp_csi_egui::rerun_sink::{RerunSink, Transport};
-//! use esp_csi_egui::data::CsiData;
+//! use csi_gui_rs::rerun_sink::{RerunSink, Transport};
+//! use csi_gui_rs::data::CsiData;
 //!
 //! // Spawn a viewer and forward one packet:
 //! let mut sink = RerunSink::new(Transport::Spawn);
@@ -493,7 +493,7 @@ impl Drop for RerunSink {
 
 #[cfg(feature = "rerun")]
 fn build_spawn() -> Result<rerun::RecordingStream, String> {
-    rerun::RecordingStreamBuilder::new("esp-csi-egui")
+    rerun::RecordingStreamBuilder::new("csi-gui-rs")
         .spawn()
         .map_err(|e| e.to_string())
 }
@@ -502,7 +502,7 @@ fn build_spawn() -> Result<rerun::RecordingStream, String> {
 fn build_connect(host: &str, port: u16) -> Result<rerun::RecordingStream, String> {
     // rerun 0.20+ takes a `rerun+http://host:port/proxy` URL via gRPC.
     let url = format!("rerun+http://{host}:{port}/proxy");
-    rerun::RecordingStreamBuilder::new("esp-csi-egui")
+    rerun::RecordingStreamBuilder::new("csi-gui-rs")
         .connect_grpc_opts(url)
         .map_err(|e| e.to_string())
 }
@@ -514,7 +514,7 @@ fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
-    rerun::RecordingStreamBuilder::new("esp-csi-egui")
+    rerun::RecordingStreamBuilder::new("csi-gui-rs")
         .save(path)
         .map_err(|e| e.to_string())
 }
@@ -534,8 +534,8 @@ fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
 ///
 /// ```no_run
 /// # use std::path::PathBuf;
-/// # use esp_csi_egui::data::History;
-/// # use esp_csi_egui::rerun_sink::export_history_to_rrd;
+/// # use csi_gui_rs::data::History;
+/// # use csi_gui_rs::rerun_sink::export_history_to_rrd;
 /// let history = History::new();
 /// let path = PathBuf::from("exports/history.rrd");
 /// export_history_to_rrd(&history, &path).unwrap();
@@ -548,7 +548,7 @@ pub fn export_history_to_rrd(history: &History, path: &Path) -> Result<(), Strin
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
         }
-        let rec = rerun::RecordingStreamBuilder::new("esp-csi-egui-export")
+        let rec = rerun::RecordingStreamBuilder::new("csi-gui-rs-export")
             .save(path)
             .map_err(|e| e.to_string())?;
 

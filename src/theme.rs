@@ -127,7 +127,7 @@ impl Theme {
     }
 
     pub fn apply_to(&self, ctx: &egui::Context) {
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         let mut visuals = if matches!(self.variant, ThemeVariant::Light) {
             egui::Visuals::light()
         } else {
@@ -139,6 +139,6 @@ impl Theme {
         visuals.widgets.noninteractive.fg_stroke =
             egui::Stroke::new(1.0, self.text_normal);
         style.visuals = visuals;
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 }
