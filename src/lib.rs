@@ -105,16 +105,20 @@
 //! - [`protocol`] — wire-level parsers, firmware identification, command
 //!   rendering.
 //! - [`data`] — in-memory CSI representation, ring-buffer history,
-//!   pre-computed per-tick stats, shared DSP helpers.
+//!   pre-computed per-tick stats, shared DSP helpers, the live
+//!   preprocessing pipeline.
 //! - [`views`] — every visualization pane (Dashboard, Magnitude, Phase,
 //!   Polar, CIR, Spectrogram, Evolution, I/Q Scatter, Console, Replay).
 //! - [`layout`] — tiling pane manager and persistable layout tree.
-//! - [`persistence`] — JSON layout templates + CSV export of captured CSI.
+//! - [`persistence`] — full-workspace JSON templates (layout + theme +
+//!   preprocessing + view-state knobs) and capture export/import in
+//!   CSV / JSONL / Parquet.
 //! - [`rerun_sink`] — Rerun integration (Cargo feature `rerun`).
 //! - [`console`] — rolling raw-UART text buffer used by the Console view.
 //! - [`shared`] — lock-free state shared between the reader thread and the
 //!   UI thread.
-//! - [`ui`] — modal overlays (config, help, view selector, etc.).
+//! - [`ui`] — modal overlays (config, help, view selector, theme
+//!   picker, preprocessing, …).
 //! - [`theme`] — color schemes.
 
 pub mod app;

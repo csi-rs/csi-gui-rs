@@ -326,7 +326,19 @@ impl Ctx {
                     let _ = i;
                 }
             }
-            EspCommand::Raw(s) => self.send_line(&s),
+            EspCommand::Raw(s) => {
+                // Firmware CLI is locked while collecting (only `q` /
+                // `Q` is honoured); anything else is silently discarded
+                // on the device. Drop the command here too so it
+                // doesn't clog the wire — the UI already greys out
+                // raw-command buttons during a session, but a stale
+                // command queued from before Start could still fire.
+                if self.shared.is_collecting.load(Ordering::Acquire) {
+                    log::debug!("raw command ignored while collecting: {s}");
+                } else {
+                    self.send_line(&s);
+                }
+            }
             EspCommand::Shutdown => {}
         }
     }

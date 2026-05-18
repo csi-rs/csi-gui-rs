@@ -15,9 +15,12 @@ pub mod csi;
 pub mod dsp;
 /// Bounded history ring buffer keyed by per-tick id.
 pub mod history;
+/// Pluggable post-capture pre-visualisation processing pipeline.
+pub mod preprocess;
 /// Per-tick aggregate stats (PPS, RSSI, SNR, …).
 pub mod stats;
 
 pub use csi::CsiData;
 pub use history::{DEFAULT_HISTORY_CAP, History};
+pub use preprocess::PreprocessConfig;
 pub use stats::NetworkStats;

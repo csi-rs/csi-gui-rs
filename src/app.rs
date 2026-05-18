@@ -5,29 +5,67 @@
 //! overlays — and routes input + draws the UI each frame.
 
 use crate::console::RawConsole;
-use crate::data::History;
+use crate::data::{History, PreprocessConfig};
 use crate::layout::{LayoutNode, SplitDirection, TilingManager, ViewType};
 use crate::persistence;
 use crate::protocol::{
     command::EspCommand,
     info::{DeviceInfo, SUPPORTED_PROTOCOL},
 };
-use crate::reader::{enumerate_ports, spawn_reader, ConnState, ReaderHandles};
+use crate::reader::{ConnState, ReaderHandles, enumerate_ports, spawn_reader};
 use crate::rerun_sink::{self, RerunSink, Transport};
 use crate::shared::EspSharedState;
 use crate::theme::{Theme, ThemeVariant};
 use crate::ui::{
+    alert::Alert,
     config_overlay::{ConfigOverlay, ConfigOverlayResult},
     help::HelpOverlay,
     main_menu::{MainMenu, MainMenuItem},
+    preprocess_overlay::{PreprocessOverlay, PreprocessOverlayResult},
     template_picker::{TemplatePicker, TemplatePickerResult},
     text_input::{TextPrompt, TextPromptPurpose, TextPromptResult},
+    theme_picker::{ThemePicker, ThemePickerResult},
     view_selector::ViewSelector,
 };
-use crate::views::{render_view, ReplayState, ViewCtx, ViewStates};
-use std::sync::atomic::Ordering;
+use crate::views::{ReplayState, ViewCtx, ViewStates, render_view};
+use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+
+/// Size of the rolling raw-packet buffer kept around so window-based
+/// preprocessing filters have continuity context across the live stream.
+/// Big enough to span the longest stage window we expose (moving-average
+/// detrending caps at 128) without dragging memory unduly — each entry
+/// is a few hundred bytes of CSI.
+const PREPROCESS_CONTEXT: usize = 256;
+
+/// Adwaita Sans Regular (SIL OFL 1.1) — vendored at
+/// `assets/fonts/AdwaitaSans-Regular.ttf`. Bundled as a last-resort
+/// fallback so Unicode arrows (← → ↑ ↓), play/stop glyphs (▶ ●), and
+/// other symbols outside eframe's default-font coverage render
+/// correctly instead of showing as the "missing glyph" tofu box.
+const SYMBOL_FALLBACK_TTF: &[u8] =
+    include_bytes!("../assets/fonts/AdwaitaSans-Regular.ttf");
+
+/// Install [`SYMBOL_FALLBACK_TTF`] at the end of every default font
+/// family so the existing Ubuntu / Hack fonts keep priority for ASCII
+/// and only the gaps fall through.
+fn install_symbol_fallback_font(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "symbol_fallback".to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(SYMBOL_FALLBACK_TTF)),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push("symbol_fallback".to_owned());
+    }
+    ctx.set_fonts(fonts);
+}
 
 pub struct App {
     pub tiling: TilingManager,
@@ -49,6 +87,16 @@ pub struct App {
     pub main_menu: MainMenu,
     pub view_selector: ViewSelector,
     pub config_overlay: ConfigOverlay,
+    pub theme_picker: ThemePicker,
+    pub preprocess_overlay: PreprocessOverlay,
+    /// Modal alert used to surface import / export success and errors
+    /// — much more discoverable than the log line we used to emit.
+    pub alert: Alert,
+    pub preprocess: PreprocessConfig,
+    /// Rolling raw-packet buffer used as context for the live preprocess
+    /// pipeline. Cleared whenever the user changes [`Self::preprocess`]
+    /// so the new config doesn't see stale samples.
+    preprocess_buffer: VecDeque<crate::data::CsiData>,
     pub text_prompt: TextPrompt,
     pub template_picker: TemplatePicker,
     pub quit_confirm_open: bool,
@@ -59,6 +107,16 @@ pub struct App {
     pub last_port_scan: Instant,
     pub firmware_warning_dismissed: bool,
     pub last_tick: Instant,
+
+    /// `true` after the user imports an exported capture and the GUI
+    /// is parked in replay-on-import mode. While this is set the live
+    /// pump_reader still drains the reader's channel (so it can't
+    /// back-pressure into a permanent overflow) but does NOT push the
+    /// drained packets into `history` — that would silently overwrite
+    /// the imported recording with whatever the ESP32 is emitting.
+    /// `Start Collection` is also blocked until the user explicitly
+    /// cancels the replay.
+    pub imported_recording: bool,
 }
 
 impl App {
@@ -82,8 +140,12 @@ impl App {
         let reader = spawn_reader(shared.clone(), console.clone());
         let rerun = RerunSink::new(rerun_transport);
 
-        let tiling = persistence::load_startup_template().unwrap_or_default();
-        let theme_variant = ThemeVariant::from_u8(tiling.theme_variant);
+        install_symbol_fallback_font(&cc.egui_ctx);
+
+        let startup = persistence::load_startup_template().unwrap_or_else(|| {
+            persistence::Template::from(crate::layout::TilingManager::default())
+        });
+        let theme_variant = ThemeVariant::from_u8(startup.tiling.theme_variant);
         let theme = Theme::from_variant(theme_variant);
         theme.apply_to(&cc.egui_ctx);
 
@@ -94,9 +156,9 @@ impl App {
         }
 
         Self {
-            tiling,
+            tiling: startup.tiling,
             history: History::with_capacity(history_size),
-            view_states: ViewStates::default(),
+            view_states: startup.view_states,
             shared,
             console,
             replay: ReplayState::default(),
@@ -111,6 +173,11 @@ impl App {
             main_menu: MainMenu::default(),
             view_selector: ViewSelector::default(),
             config_overlay: ConfigOverlay::default(),
+            theme_picker: ThemePicker::default(),
+            preprocess_overlay: PreprocessOverlay::default(),
+            alert: Alert::default(),
+            preprocess: startup.preprocess,
+            preprocess_buffer: VecDeque::with_capacity(PREPROCESS_CONTEXT),
             text_prompt: TextPrompt::default(),
             template_picker: TemplatePicker::default(),
             quit_confirm_open: false,
@@ -120,6 +187,7 @@ impl App {
             last_port_scan: Instant::now(),
             firmware_warning_dismissed: false,
             last_tick: Instant::now(),
+            imported_recording: false,
         }
     }
 
@@ -164,10 +232,49 @@ impl App {
         }
         let raw_after = self.shared.frames_total.load(Ordering::Relaxed);
         let raw_delta = raw_after.saturating_sub(raw_before);
-        if let Some(stats) = self.history.push_tick(batch, raw_delta) {
+
+        // While the user is replaying an imported recording we still
+        // drain the reader's channel (so it can't back-pressure into a
+        // permanent overflow) but we throw the live packets away —
+        // letting them through would silently overwrite the imported
+        // history the user is inspecting.
+        if self.imported_recording {
+            self.last_tick = Instant::now();
+            return;
+        }
+
+        let processed = self.preprocess_incoming(batch);
+        if let Some(stats) = self.history.push_tick(processed, raw_delta) {
             self.rerun.log_tick(stats);
         }
         self.last_tick = Instant::now();
+    }
+
+    /// Bake the active [`crate::data::PreprocessConfig`] into freshly
+    /// captured packets. The pre-process buffer holds the most recent
+    /// `PREPROCESS_CONTEXT` raw packets so window-based filters
+    /// (least-squares baseline, moving-average detrending, per-window
+    /// scaling) have signal continuity, while history rows already
+    /// committed stay untouched — toggling a filter never rewrites the
+    /// past.
+    fn preprocess_incoming(&mut self, batch: Vec<crate::data::CsiData>) -> Vec<crate::data::CsiData> {
+        if !self.preprocess.is_active() || batch.is_empty() {
+            return batch;
+        }
+        let n_new = batch.len();
+        for p in &batch {
+            self.preprocess_buffer.push_back(p.clone());
+        }
+        while self.preprocess_buffer.len() > PREPROCESS_CONTEXT {
+            self.preprocess_buffer.pop_front();
+        }
+        let raw_window: Vec<crate::data::CsiData> =
+            self.preprocess_buffer.iter().cloned().collect();
+        let processed = self.preprocess.apply(&raw_window);
+        // Pipeline is cardinality-preserving; the tail `n_new` entries
+        // correspond to the packets we just pushed.
+        let take = n_new.min(processed.len());
+        processed[processed.len() - take..].to_vec()
     }
 
     fn advance_replay(&mut self) {
@@ -214,6 +321,80 @@ impl App {
         }
     }
 
+    /// Walk the user through a CSI-capture import.
+    ///
+    /// Pops a native file dialog filtered to the supported export
+    /// extensions, validates the result against the current collection
+    /// state, runs the dispatcher in [`persistence::import_history`],
+    /// and surfaces success / failure in the modal [`Alert`] so the
+    /// user actually sees what happened. After a successful load the
+    /// reader's outgoing packet channel is drained so an in-flight
+    /// packet from before the import can't slip into the freshly
+    /// loaded history on the next pump tick.
+    fn run_import_flow(&mut self) {
+        if self.shared.is_collecting.load(Ordering::Acquire) {
+            self.alert.open_error(
+                "Import unavailable",
+                "Stop the live collection before importing a capture.",
+            );
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import CSI capture")
+            .add_filter("CSI captures", &["csv", "jsonl", "json", "ndjson", "parquet", "pq"])
+            .add_filter("All files", &["*"])
+            .pick_file()
+        else {
+            return; // User cancelled — nothing to do.
+        };
+        if !path.exists() {
+            self.alert.open_error(
+                "Import failed",
+                format!("File not found:\n{}", path.display()),
+            );
+            return;
+        }
+        match persistence::import_history(&path) {
+            Ok(pkts) if pkts.is_empty() => {
+                self.alert.open_error(
+                    "Import failed",
+                    format!(
+                        "No decoded packets in:\n{}\n\nThe file may be empty or in an \
+                         unrecognised format. Supported extensions: .csv / .jsonl / .parquet.",
+                        path.display()
+                    ),
+                );
+            }
+            Ok(pkts) => {
+                let count = pkts.len();
+                self.history.load_from_packets(pkts);
+                self.preprocess_buffer.clear();
+                while self.reader.packets.try_recv().is_ok() {}
+                self.replay.anchor = self.history.first_id();
+                self.replay.playing = false;
+                // Lock down the live pump while the imported recording
+                // is the source of truth — the user can leave this
+                // mode with the `R` key (snap to LIVE) or by starting
+                // a new collection.
+                self.imported_recording = true;
+                self.alert.open_info(
+                    "Import complete",
+                    format!(
+                        "Loaded {count} packets from\n{}\n\nReplay anchor set to packet 0. \
+                         Live collection is locked until you press R or start a new session.",
+                        path.display()
+                    ),
+                );
+            }
+            Err(e) => {
+                self.alert.open_error(
+                    "Import failed",
+                    format!("{}\n\n{e}", path.display()),
+                );
+            }
+        }
+    }
+
     /// `true` when the reader has identified an ESP32 running a supported
     /// `esp-csi-cli-rs` build. Used to gate "Start Collection" so the user
     /// can't kick a session off against an absent or unrecognised device.
@@ -242,6 +423,9 @@ impl App {
             || self.config_overlay.open
             || self.text_prompt.open
             || self.template_picker.open
+            || self.theme_picker.open
+            || self.preprocess_overlay.open
+            || self.alert.open
             || self.quit_confirm_open;
         if any_overlay {
             if self.quit_confirm_open {
@@ -279,9 +463,12 @@ impl App {
                 self.view_selector.selected = 0;
             }
             if !shift && i.key_pressed(egui::Key::R) {
-                // R = return all panes to LIVE.
+                // R = return all panes to LIVE. Also exits import-replay
+                // mode so newly captured packets can flow into history
+                // again.
                 self.replay.anchor = None;
                 self.replay.playing = false;
+                self.imported_recording = false;
             }
             #[cfg(feature = "rerun")]
             if shift && i.key_pressed(egui::Key::R) {
@@ -309,10 +496,20 @@ impl App {
             }
 
             if shift {
-                if i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowRight) {
+                // Split shortcuts must NOT auto-repeat: egui's
+                // `key_pressed` is true on every OS-key-repeat event,
+                // so holding Shift+Right would spam splits until
+                // MAX_PANES capped out, leaving the user with N tiny
+                // overlapping panes. Filter the event stream for the
+                // initial press only (`repeat: false`).
+                if key_first_pressed(i, egui::Key::ArrowLeft)
+                    || key_first_pressed(i, egui::Key::ArrowRight)
+                {
                     self.tiling.split(SplitDirection::Horizontal);
                 }
-                if i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown) {
+                if key_first_pressed(i, egui::Key::ArrowUp)
+                    || key_first_pressed(i, egui::Key::ArrowDown)
+                {
                     self.tiling.split(SplitDirection::Vertical);
                 }
             } else if let (Some(first), Some(last)) =
@@ -386,13 +583,17 @@ impl App {
 
     fn handle_overlays(&mut self, ctx: &egui::Context) {
         self.help.show(ctx);
+        self.alert.show(ctx);
 
         let is_collecting = self.shared.is_collecting.load(Ordering::Acquire);
         let device_ready = self.is_device_ready();
 
         if let Some(item) = self.main_menu.show(ctx, is_collecting, device_ready) {
             match item {
-                MainMenuItem::Theme => self.cycle_theme(ctx),
+                MainMenuItem::Theme => {
+                    self.theme_picker.open = true;
+                    self.theme_picker.variant = self.theme_variant;
+                }
                 MainMenuItem::SaveTemplate => {
                     self.text_prompt.open = true;
                     self.text_prompt.title = "Save Template".into();
@@ -406,10 +607,20 @@ impl App {
                 MainMenuItem::ExportData => {
                     self.text_prompt.open = true;
                     self.text_prompt.title = "Export Data".into();
-                    self.text_prompt.label = "Export name (timestamp appended):".into();
+                    self.text_prompt.label = "Filename (timestamp + extension appended):".into();
                     self.text_prompt.purpose = TextPromptPurpose::ExportData;
+                    self.text_prompt.export_format = persistence::ExportFormat::Csv;
+                }
+                MainMenuItem::ImportData => self.run_import_flow(),
+                MainMenuItem::Preprocess => {
+                    self.preprocess_overlay.cfg = self.preprocess.clone();
+                    self.preprocess_overlay.open = true;
                 }
                 MainMenuItem::ResetEsp => {
+                    // Reset implicitly cancels any imported-replay
+                    // session — the user is signalling a fresh start
+                    // against the live device.
+                    self.imported_recording = false;
                     let _ = self.reader.commands.send(EspCommand::Reset);
                 }
                 MainMenuItem::ConfigureEsp => {
@@ -420,6 +631,12 @@ impl App {
                     if is_collecting {
                         let _ = self.reader.commands.send(EspCommand::Stop);
                         self.rerun.mark_session_boundary();
+                    } else if self.imported_recording {
+                        self.alert.open_error(
+                            "Cannot start collection",
+                            "An imported recording is currently being replayed. \
+                             Click `Exit Replay` (status bar) or press R first.",
+                        );
                     } else if device_ready {
                         let dur = self.config_overlay.cfg.start_duration_sec;
                         let _ = self
@@ -449,13 +666,55 @@ impl App {
             ConfigOverlayResult::Cancel | ConfigOverlayResult::None => {}
         }
 
+        match self.theme_picker.show(ctx) {
+            ThemePickerResult::Pick(variant) => {
+                self.theme_variant = variant;
+                self.theme = Theme::from_variant(variant);
+                self.tiling.theme_variant = variant.as_u8();
+                self.theme.apply_to(ctx);
+            }
+            ThemePickerResult::Cancel | ThemePickerResult::None => {}
+        }
+
+        match self.preprocess_overlay.show(ctx) {
+            PreprocessOverlayResult::Apply(cfg) => {
+                self.preprocess = cfg;
+                // New filter settings should not "see" packets that
+                // arrived before they were enabled — clear the rolling
+                // context so the next batch starts fresh.
+                self.preprocess_buffer.clear();
+            }
+            PreprocessOverlayResult::Reset => {
+                self.preprocess = crate::data::PreprocessConfig::default();
+                self.preprocess_buffer.clear();
+            }
+            PreprocessOverlayResult::Cancel | PreprocessOverlayResult::None => {}
+        }
+
         match self.text_prompt.show(ctx) {
             TextPromptResult::Submit(name, TextPromptPurpose::SaveTemplate) => {
-                let _ = persistence::save_template(&name, &self.tiling);
+                // Bundle the layout, the active preprocessing pipeline,
+                // and every per-pane view-state knob so reloading the
+                // template restores the user's whole workspace, not
+                // just the tiling skeleton.
+                let tpl = persistence::Template {
+                    tiling: self.tiling.clone(),
+                    preprocess: self.preprocess.clone(),
+                    view_states: self.view_states.clone(),
+                };
+                let _ = persistence::save_template(&name, &tpl);
             }
-            TextPromptResult::Submit(name, TextPromptPurpose::ExportData) => {
+            TextPromptResult::SubmitExport(name, fmt) => {
+                // history.raw_history already holds the post-preprocessing
+                // packets that were captured live, so the export is
+                // exactly what the visualisations have been showing —
+                // no retroactive rewriting. Format comes straight from
+                // the radio row in the prompt; the filename is just
+                // the stem (the format-specific extension and
+                // `_<unix>` get appended downstream).
                 let raw: Vec<_> = self.history.raw_history.iter().cloned().collect();
-                let _ = persistence::export_history_csv(&name, &raw);
+                let stem = filename_stem_for_export(&name);
+                let _ = persistence::export_history(&stem, &raw, fmt);
             }
             TextPromptResult::Submit(name, TextPromptPurpose::RerunConnect) => {
                 self.rerun.set_transport(parse_host_port(&name));
@@ -495,15 +754,22 @@ impl App {
                     log::error!("rerun history export failed: {e}");
                 }
             }
+            // Submit-for-ExportData is routed through SubmitExport; the
+            // path below should never fire but stays exhaustive for the
+            // compiler.
             TextPromptResult::Submit(_, TextPromptPurpose::None)
+            | TextPromptResult::Submit(_, TextPromptPurpose::ExportData)
             | TextPromptResult::Cancel
             | TextPromptResult::None => {}
         }
 
         match self.template_picker.show(ctx) {
             TemplatePickerResult::Load(path) => {
-                if let Ok(tm) = persistence::read_template(&path) {
-                    self.tiling = tm;
+                if let Ok(tpl) = persistence::read_template(&path) {
+                    self.tiling = tpl.tiling;
+                    self.preprocess = tpl.preprocess;
+                    self.preprocess_buffer.clear();
+                    self.view_states = tpl.view_states;
                     self.theme_variant = ThemeVariant::from_u8(self.tiling.theme_variant);
                     self.theme = Theme::from_variant(self.theme_variant);
                     self.theme.apply_to(ctx);
@@ -594,11 +860,30 @@ impl App {
                     self.template_picker.refresh();
                     ui.close();
                 }
+                ui.separator();
                 if ui.button("Export Data…").clicked() {
                     self.text_prompt.open = true;
                     self.text_prompt.title = "Export Data".into();
-                    self.text_prompt.label = "Export name (timestamp appended):".into();
+                    self.text_prompt.label =
+                        "Filename (timestamp + extension appended):".into();
                     self.text_prompt.purpose = TextPromptPurpose::ExportData;
+                    self.text_prompt.export_format = persistence::ExportFormat::Csv;
+                    ui.close();
+                }
+                // Importing rewinds the history buffer with a captured
+                // recording — block it while a live session is active
+                // so the user doesn't accidentally clobber data they're
+                // still collecting.
+                let import_enabled = !is_collecting;
+                let import_btn =
+                    ui.add_enabled(import_enabled, egui::Button::new("Import Data… (Replay)"));
+                let import_btn = if !import_enabled {
+                    import_btn.on_disabled_hover_text("Stop the live collection first.")
+                } else {
+                    import_btn
+                };
+                if import_btn.clicked() {
+                    self.run_import_flow();
                     ui.close();
                 }
                 ui.separator();
@@ -649,7 +934,23 @@ impl App {
                     self.config_overlay.is_collecting = is_collecting;
                     ui.close();
                 }
-                if ui.button("Reset Config to defaults").clicked() {
+                // The firmware locks the CLI while collecting (only
+                // `q` is honoured), so every `set-*` / `show-*` / raw
+                // command would be silently discarded. Disable the
+                // buttons that send them and explain why on hover.
+                let cli_disabled_hint =
+                    "Stop the live collection first — the firmware CLI is locked while \
+                     IS_COLLECTING is true.";
+                let resp = ui.add_enabled(
+                    !is_collecting,
+                    egui::Button::new("Reset Config to defaults"),
+                );
+                let resp = if is_collecting {
+                    resp.on_disabled_hover_text(cli_disabled_hint)
+                } else {
+                    resp
+                };
+                if resp.clicked() {
                     let _ = self
                         .reader
                         .commands
@@ -663,12 +964,16 @@ impl App {
                     "Start Collection"
                 };
                 let device_ready = self.is_device_ready();
-                let start_enabled = is_collecting || device_ready;
+                let start_enabled =
+                    is_collecting || (device_ready && !self.imported_recording);
                 let resp = ui.add_enabled(start_enabled, egui::Button::new(start_label));
                 let resp = if !start_enabled {
-                    resp.on_disabled_hover_text(
-                        "Connect an ESP32 running esp-csi-cli-rs firmware first.",
-                    )
+                    let reason = if self.imported_recording {
+                        "Exit replay first (status-bar button or R key)."
+                    } else {
+                        "Connect an ESP32 running esp-csi-cli-rs firmware first."
+                    };
+                    resp.on_disabled_hover_text(reason)
                 } else {
                     resp
                 };
@@ -686,29 +991,38 @@ impl App {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button("show-config (raw)").clicked() {
+                let raw_button = |ui: &mut egui::Ui, label: &str| -> egui::Response {
+                    let resp = ui.add_enabled(!is_collecting, egui::Button::new(label));
+                    if is_collecting {
+                        resp.on_disabled_hover_text(cli_disabled_hint)
+                    } else {
+                        resp
+                    }
+                };
+                if raw_button(ui, "show-config (raw)").clicked() {
                     let _ = self
                         .reader
                         .commands
                         .send(EspCommand::Raw("show-config".into()));
                     ui.close();
                 }
-                if ui.button("show-stats (raw)").clicked() {
+                if raw_button(ui, "show-stats (raw)").clicked() {
                     let _ = self
                         .reader
                         .commands
                         .send(EspCommand::Raw("show-stats".into()));
                     ui.close();
                 }
-                if ui.button("info (raw)").clicked() {
+                if raw_button(ui, "info (raw)").clicked() {
                     let _ = self.reader.commands.send(EspCommand::Raw("info".into()));
                     ui.close();
                 }
             });
 
             ui.menu_button("View", |ui| {
-                if ui.button("Cycle Theme").clicked() {
-                    self.pending_theme_cycle = true;
+                if ui.button("Theme…").clicked() {
+                    self.theme_picker.variant = self.theme_variant;
+                    self.theme_picker.open = true;
                     ui.close();
                 }
                 if ui.button("Select View…").clicked() {
@@ -883,13 +1197,34 @@ impl App {
 
             if let Some(anchor) = self.replay.anchor {
                 ui.separator();
+                let badge = if self.imported_recording {
+                    "REPLAY · imported"
+                } else {
+                    "replay"
+                };
                 ui.colored_label(
                     egui::Color32::from_rgb(220, 180, 60),
-                    format!("replay @ #{anchor}"),
+                    format!("{badge} @ #{anchor}"),
                 );
-                if ui.small_button("Live").clicked() {
+                // Always-visible, accent-coloured exit-replay button so
+                // the user doesn't have to remember the `R` shortcut.
+                let exit_label = if self.imported_recording {
+                    "Exit Replay"
+                } else {
+                    "Live"
+                };
+                let resp = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new(exit_label)
+                            .color(egui::Color32::WHITE)
+                            .strong(),
+                    )
+                    .fill(egui::Color32::from_rgb(160, 110, 30)),
+                );
+                if resp.clicked() {
                     self.replay.anchor = None;
                     self.replay.playing = false;
+                    self.imported_recording = false;
                 }
             }
 
@@ -1025,10 +1360,18 @@ impl App {
                 if resp.clicked() {
                     self.tiling.focus_by_id(id);
                 }
+                // Pane id badge in the top-left. Made deliberately larger
+                // than the surrounding chrome so the user can pick a pane
+                // by id (1..9 / 0 keyboard shortcuts) at a glance.
                 ui.label(
                     egui::RichText::new(format!("#{id}"))
-                        .weak()
-                        .small(),
+                        .strong()
+                        .size(18.0)
+                        .color(if focused {
+                            self.theme.focused_border
+                        } else {
+                            self.theme.text_highlight
+                        }),
                 );
 
                 let mut vs_clone = self
@@ -1122,6 +1465,38 @@ pub fn _expose_receiver_type<T>(_r: crossbeam_channel::Receiver<T>) {}
 
 /// Parse a "host:port" string into a `Transport::Connect`, falling back to
 /// 127.0.0.1:9876 for any malformed pieces. Used by the Rerun→Connect prompt.
+/// `true` only for the *initial* press of `key` this frame — OS
+/// key-repeat events are filtered out. Used by the split-pane
+/// shortcuts so holding Shift+Arrow can't spam `TilingManager::split`
+/// faster than the user can release the key.
+fn key_first_pressed(i: &egui::InputState, key: egui::Key) -> bool {
+    i.events.iter().any(|e| {
+        matches!(
+            e,
+            egui::Event::Key {
+                key: k,
+                pressed: true,
+                repeat: false,
+                ..
+            } if *k == key
+        )
+    })
+}
+
+/// Trim and dedupe the user-typed export filename down to a stem
+/// suitable for `export_history` (which appends `_<unix>` and the
+/// format-specific extension). Empty / extension-only input falls
+/// back to a safe default so we never emit an empty filename.
+fn filename_stem_for_export(input: &str) -> String {
+    let trimmed = input.trim();
+    let path = std::path::Path::new(trimmed);
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "csi_export".to_string())
+}
+
 fn parse_host_port(s: &str) -> Transport {
     let s = s.trim();
     if s.is_empty() {

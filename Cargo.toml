@@ -30,6 +30,8 @@ postcard = { version = "1.0", default-features = false, features = ["use-std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1.3"
+# Parquet read/write without pulling in the full arrow dependency.
+parquet = { version = "55", default-features = false, features = ["snap"] }
 
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
@@ -41,7 +43,44 @@ thiserror = "2.0.18"
 
 rerun = { version = "0.32", optional = true, default-features = false, features = ["sdk"] }
 
+# Native file-picker for the Import flow.
+#
+# rfd is target-aware:
+#   * Linux uses xdg-desktop-portal over D-Bus, which is async-only; we
+#     pick its built-in `async-std` executor so `FileDialog::pick_file`
+#     works without the host providing a Tokio runtime. The first
+#     iteration here had `tokio` selected, which made zbus look for a
+#     live Tokio reactor — the binary doesn't have one, so importing
+#     panicked from inside rfd's portal call.
+#   * Windows uses the IFileDialog COM API directly — synchronous,
+#     no async runtime needed.
+#   * macOS uses NSOpenPanel — also synchronous.
+# Hence the split: Linux gets the portal feature, the other targets
+# get the default sync backend (and no async-runtime crate).
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "async-std"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "0.15", default-features = false }
+
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+panic = "abort"
+strip = true
+incremental = false
+debug = false
+
+# Force every dependency (transitive included) to compile at opt-level 3
+# in release builds. `[profile.release].opt-level = 3` already cascades by
+# default — this override is explicit so future-me / future-readers don't
+# wonder whether a slow dep is dragging the binary down.
+[profile.release.package."*"]
+opt-level = 3
+
+# Build scripts and proc macros run at compile time, so keep them at the
+# default `opt-level = 0` (fast to compile) rather than burning cycles
+# optimizing things the runtime never sees.
+[profile.release.build-override]
+opt-level = 0

@@ -1,8 +1,8 @@
-# esp-gui-rs
+# csi-gui-rs
 
 **A high-resolution desktop GUI for live ESP32 Wi-Fi Channel-State-Information (CSI) capture and analysis.**
 
-Plug an ESP32 running [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) into your laptop, run `esp-gui-rs`, and watch the radio channel in real time — magnitude, phase, I/Q scatter, channel impulse response, a phase-Δ spectrogram, and a long-window CSI evolution curve — all updating live, all scrubbable, and exportable to CSV or [Rerun](https://rerun.io) RRD for offline work.
+Plug an ESP32 running [`esp-csi-cli-rs`](https://github.com/connectedmotion-io/esp-csi-cli-rs) into your laptop, run `csi-gui-rs`, and watch the radio channel in real time — magnitude, phase, I/Q scatter, channel impulse response, a phase-Δ spectrogram, and a long-window CSI evolution curve — all updating live, all scrubbable, and exportable to **CSV / JSONL / Parquet** or [Rerun](https://rerun.io) RRD for offline work. Previously-exported captures can be imported back into the GUI for replay.
 
 ---
 
@@ -10,14 +10,15 @@ Plug an ESP32 running [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-r
 
 CSI is a goldmine for Wi-Fi sensing — gesture detection, presence sensing, channel diagnostics, indoor localization — but the tooling is painful. You either get raw byte dumps over UART, terminal-only TUIs that flicker at 5 fps, or one-off Python notebooks that need ten lines of glue before you can see a packet.
 
-`esp-gui-rs` is the *immediate-feedback* layer that's been missing:
+`csi-gui-rs` is the *immediate-feedback* layer that's been missing:
 
 - **One command** to identify the firmware, reset the chip, and start streaming.
 - **High-resolution 2D plots** with axes, zoom, pan, and tooltips — not terminal art.
 - **All four firmware log modes** (`text`, `array-list`, `serialized`, `esp-csi-tool`) decode to a single in-memory schema, so the visualizations look identical no matter which wire format you pick.
 - **Ten built-in visualizations** that cover the workflow from "is anything moving?" to "what does subcarrier 24's phase look like across the last 400 packets?"
+- **Live preprocessing pipeline** with Interpolation, Detrending, and Feature-Scaling stages baked into newly captured packets — toggling a filter never retroactively rewrites the past.
 - **Replay any moment** with a global timeline scrubber — every pane jumps back together.
-- **Export to CSV** for pandas / MATLAB, or to **Rerun** for time-anchored, scrubbable offline analysis.
+- **Export to CSV, JSONL, or Parquet** for pandas / MATLAB / Spark, or to **Rerun** for time-anchored, scrubbable offline analysis. **Import** any of those formats back into the GUI to replay an old capture without an ESP plugged in.
 - **A console pane** that shows the raw firmware UART, so you're never wondering why nothing's showing up.
 
 It's the difference between *running an experiment* and *debugging your tooling*.
@@ -27,23 +28,27 @@ It's the difference between *running an experiment* and *debugging your tooling*
 ## Features
 
 - **Auto-connect** to the first available serial port, with hardware DTR/RTS reset, banner identification, and graceful handling of hot-unplugs.
+- **Auto config sync** — on every connect the GUI's full `EspConfig` is pushed to the firmware, so the device's wire format (default `LogMode::Serialized`) matches what the host expects from the very first packet.
 - **All firmware log modes decode**: `text`, `array-list`, `serialized` (COBS-framed postcard — both classic-chip and ESP32-C5/C6 schemas), and `esp-csi-tool` (Hernandez 26-column CSV).
-- **Live visualizations** (any of which can be split into multiple tiles side-by-side):
+- **Live visualizations** (any of which can be split into multiple tiles side-by-side; every pane carries a large `#N` id badge for keyboard focus shortcuts 1..9 / 0):
   - **Dashboard** — PPS, SNR, RSSI, firmware status at a glance.
   - **Magnitude** — `|H(k)|` vs subcarrier (DC-centered), linear or dB, with three display modes: per-packet traces, mean ± σ envelope, or subcarrier × time **heatmap**.
   - **Phase** — raw / unwrapped / detrended, with the same three display modes (heatmap uses a diverging colormap for signed quantities).
   - **Polar** — current frame as a polar amplitude diagram.
   - **CIR** — channel impulse response (IDFT) over the last *N* packets, faded by age.
   - **Spectrogram** — phase-Δ or amplitude over time, smooth viridis colormap.
-  - **Evolution** — long-window time series of a single scalar per packet: mean `|H|`, std-dev of `|H|` across subcarriers, frame-to-frame Δ`|H|` (textbook motion proxy), or RSSI.
+  - **Evolution** — long-window time series of a single scalar per packet: mean `|H|`, std-dev of `|H|` across subcarriers, frame-to-frame Δ`|H|` (textbook motion proxy), or RSSI. Auto-follows the head of the stream.
   - **I/Q scatter** — every (I, Q) sample for the last *N* packets, density via alpha overlap.
   - **Console** — raw UART text capture with command echo for visibility into the firmware.
   - **Replay** — global timeline scrubber + play/pause + speed.
-- **Tiling layout** — split panes horizontally / vertically, fullscreen one, save layouts as templates.
+- **Preprocessing pipeline** (Preprocessing… in the **M** menu): three stages applied at capture time so the past stays immutable — Interpolation (Linear / Nearest-Neighbour), Detrending (Least-Squares Baseline / Moving-Average Trend), Feature Scaling (Min-Max / Z-Score / Quantize). All three stages preserve packet cardinality.
+- **Tiling layout** — split panes horizontally / vertically, fullscreen one, save the whole workspace (layout + theme + preprocessing config + per-pane view knobs) as a named template.
+- **Theme picker** (5 built-in: Dark, Light, Nordic, Gruvbox, Catppuccin). Pick directly from the menu, or press **T** to cycle.
 - **Global replay** — scrubber + play / pause + speed; every pane follows the same anchor.
-- **CSV export** — one uniform 22-column schema regardless of the firmware's wire format.
+- **Multi-format export** (`Export Data` in the menu) — write captured packets to **CSV** (Hernandez-style 23 columns), **JSONL** (one `CsiData` per line), or **Parquet** (Snappy-compressed). Format is inferred from the filename extension you type (`.csv` / `.jsonl` / `.parquet`); anything else defaults to CSV.
+- **Multi-format import** (`Import Data (Replay)`) — load any of the three exported formats back into history. The GUI snaps into replay mode so you can scrub through an old capture without hardware. Disabled while a live collection is in progress.
 - **Rerun integration** *(optional `--features rerun`)* — spawn a viewer, connect to a running one, or save `.rrd` files for offline replay. UI is hidden in the no-feature build, so it never clutters the menu when you don't need it.
-- **Themes** — five built-in (Dark, Light, Nordic, Gruvbox, Catppuccin).
+- **Bundled symbol font** — Adwaita Sans Regular (SIL OFL 1.1) is shipped as a last-resort font fallback so Unicode arrows, ▶, ● and friends render correctly out of the box.
 
 ---
 
@@ -66,6 +71,8 @@ With Rerun support:
 cargo run --release --features rerun -- --rerun=spawn
 ```
 
+The release profile maximises optimisation — `opt-level=3` + `lto="fat"` + `panic="abort"` + `strip=true` for the crate and every dependency, plus build scripts kept at `opt-level=0` so compile times don't tank.
+
 ---
 
 ## Quick start
@@ -73,19 +80,47 @@ cargo run --release --features rerun -- --rerun=spawn
 1. Plug the ESP32 into a USB port.
 2. `cargo run --release`
 3. The GUI opens, auto-detects the port, resets the device, identifies the firmware, and lands on the Dashboard.
-4. Click **ESP → Start Collection** (or pick *Start Collection* from the **M** menu).
+4. Click **ESP → Start Collection** (or pick *Start Collection* from the **M** menu — disabled until a recognised device is identified).
 5. Hit **Enter** to switch the focused pane to **Magnitude**, **Phase**, **Spectrogram**, **Evolution**, or any other view. Use **Shift+Arrow** to split the pane and show multiple views side-by-side.
 6. Press **Enter → Replay** to add a scrubber pane. Drag the slider; all live panes rewind together. Press **R** to snap back to LIVE.
-7. **File → Export Data…** writes a CSV with one row per packet to `exports/`.
+7. **M → Export Data** writes the current capture to `exports/` — type a filename with the extension you want (`run42.csv`, `run42.jsonl`, `run42.parquet`).
+8. **M → Import Data (Replay)** loads any previously exported file back into history and parks you in replay mode (requires that collection is stopped).
 
 ```sh
 # Common flags:
-esp-gui-rs --baud=115200                 # default
-esp-gui-rs --history-size=50000          # keep more packets in memory
-esp-gui-rs --rerun=spawn                 # launch a Rerun viewer
-esp-gui-rs --rerun=file:logs/run1.rrd    # record to an RRD file
-esp-gui-rs --help
+csi-gui-rs --baud=115200                 # default
+csi-gui-rs --history-size=50000          # keep more packets in memory
+csi-gui-rs --rerun=spawn                 # launch a Rerun viewer
+csi-gui-rs --rerun=file:logs/run1.rrd    # record to an RRD file
+csi-gui-rs --help
 ```
+
+---
+
+## Export / import file layout
+
+All three export formats use the same schema. Pick whichever your downstream tooling reads:
+
+| Format    | Extension(s)         | What's in the file                                                                 |
+|-----------|----------------------|-------------------------------------------------------------------------------------|
+| CSV       | `.csv`               | Hernandez 23-column schema. `csi_raw_data` is a space-separated `[…]` list.        |
+| JSONL     | `.jsonl`/`.json`/`.ndjson` | One `CsiData` per line. Native `serde` representation — round-trips losslessly. |
+| Parquet   | `.parquet`/`.pq`     | Snappy-compressed, same 23 columns. `csi_raw_data` stored as a UTF-8 string column.|
+
+The importer auto-detects the format from the extension. Unknown extensions fall back to CSV.
+
+---
+
+## Templates
+
+Templates are JSON files written under `templates/` (relative to your working directory). Each template captures the **complete workspace**:
+
+- the tiling layout (panes, splits, focused id),
+- the active theme,
+- the current preprocessing pipeline,
+- every per-pane view-state knob (window sizes, scale toggles, etc.).
+
+Reloading a template restores all of the above. One template per directory can be marked default — on next launch it loads automatically. Old template files written before this rewrite (bare `TilingManager`) still load; missing fields default to "off".
 
 ---
 
@@ -102,7 +137,8 @@ esp-gui-rs --help
 | `Delete` | Close the focused pane |
 | `←/→` | Step the global replay anchor |
 | `R` | Cancel replay, snap to LIVE |
-| `T` | Cycle theme |
+| `T` | Cycle theme (the **M** menu also has a direct picker) |
+| `1..9, 0` | Focus pane by id |
 | `Shift+R` | Toggle Rerun live streaming *(with `--features rerun`)* |
 | `Shift+L` | Toggle Rerun RRD recording *(with `--features rerun`)* |
 
@@ -110,4 +146,4 @@ esp-gui-rs --help
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option.
+Dual-licensed under MIT or Apache-2.0, at your option. The bundled Adwaita Sans font is SIL OFL 1.1 — see `assets/fonts/LICENSE-AdwaitaSans`.

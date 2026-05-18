@@ -147,7 +147,7 @@ pub fn subcarrier_x_bounds(n: usize) -> (f64, f64) {
 }
 
 /// Container of per-pane [`ViewState`] keyed by pane id.
-#[derive(Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ViewStates {
     /// One `ViewState` per layout pane id.
     pub per_pane: HashMap<usize, ViewState>,

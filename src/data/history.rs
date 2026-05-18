@@ -111,6 +111,45 @@ impl History {
         self.started = Instant::now();
     }
 
+    /// Bulk-load an imported recording into the buffer as if every
+    /// packet had been received live, one per tick. Used by the file
+    /// importer ([`crate::persistence::import_history`]) when the user
+    /// loads a previously exported `.csv` / `.jsonl` / `.parquet`
+    /// capture to replay it.
+    ///
+    /// Existing history is dropped first; entries are appended in the
+    /// order they appear in `packets`, with `next_id` advancing per
+    /// packet so the replay scrubber sees one tick per packet.
+    pub fn load_from_packets(&mut self, packets: Vec<CsiData>) {
+        self.clear();
+        for p in packets.into_iter().filter(|p| p.is_decoded()) {
+            NetworkStats::accumulate_grid(&mut self.grid, &p);
+            if self.raw_history.len() == self.cap {
+                self.raw_history.pop_front();
+            }
+            self.raw_history.push_back(p.clone());
+
+            let rssi = p.rssi;
+            let nf = p.noise_floor;
+            let snr = rssi - nf;
+            let stats = NetworkStats {
+                id: self.next_id,
+                rssi,
+                pps: 0,
+                snr,
+                timestamp: self.next_id * TICK_MS,
+                csi: Some(p),
+                distribution_grid: self.grid,
+            };
+            self.next_id += 1;
+            if self.entries.len() == self.cap {
+                self.entries.pop_front();
+            }
+            self.entries.push_back(stats);
+        }
+        self.frames_decoded_total = self.entries.len() as u64;
+    }
+
     /// Push one 100 ms tick of packets.
     ///
     /// `raw_frames_delta` is `EspSharedState::frames_total` delta this tick,

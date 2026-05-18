@@ -101,15 +101,22 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     // Visual marker: rolling-mean and "now" cursor.
     let mean: f32 = curve.iter().sum::<f32>() / curve.len().max(1) as f32;
 
+    // Live-tail view: lock interaction so auto-bounds wins every
+    // frame. Without this, the first user pan/zoom flips egui_plot
+    // into "manual bounds" mode and the plot stops following the head
+    // of the stream until the user keeps scrolling — exactly the
+    // "screen stopped following packets" symptom.
     Plot::new("evolution_plot")
         .legend(Legend::default())
         .x_axis_label("packet step")
         .y_axis_label(metric.y_label())
         .show_axes([true, true])
         .show_grid([true, true])
-        .allow_zoom(true)
-        .allow_drag(true)
-        .allow_boxed_zoom(true)
+        .auto_bounds([true, true])
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_boxed_zoom(false)
+        .allow_scroll(false)
         .show(ui, |plot_ui| {
             plot_ui.line(
                 Line::new(metric.label(), pts)
@@ -153,9 +160,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
 }
 
 /// Reduce one window of `NetworkStats` to a single scalar per packet
-/// for the chosen metric. Packets without decoded CSI contribute
-/// nothing (the metric falls back to the most recent valid value,
-/// which keeps the curve continuous instead of leaving NaN gaps).
+/// for the chosen metric. Packets without decoded CSI carry the most
+/// recent valid value forward so the curve stays continuous instead
+/// of leaving NaN gaps.
 fn compute_curve(metric: EvolutionMetric, stats: &[&crate::data::NetworkStats]) -> Vec<f32> {
     let mut out = Vec::with_capacity(stats.len());
     let mut last = 0.0f32;
@@ -178,13 +185,11 @@ fn compute_curve(metric: EvolutionMetric, stats: &[&crate::data::NetworkStats]) 
                 }
                 let amps: Vec<f32> = (0..n).map(|k| csi.amplitude(k)).collect();
                 let v = match metric {
-                    EvolutionMetric::MeanAmplitude => {
-                        amps.iter().sum::<f32>() / n as f32
-                    }
+                    EvolutionMetric::MeanAmplitude => amps.iter().sum::<f32>() / n as f32,
                     EvolutionMetric::StdAmplitude => {
                         let mean = amps.iter().sum::<f32>() / n as f32;
-                        let var: f32 = amps.iter().map(|a| (a - mean).powi(2)).sum::<f32>()
-                            / n as f32;
+                        let var: f32 =
+                            amps.iter().map(|a| (a - mean).powi(2)).sum::<f32>() / n as f32;
                         var.sqrt()
                     }
                     EvolutionMetric::DeltaAmplitude => match prev_amps.as_ref() {
