@@ -443,9 +443,7 @@ impl Ctx {
     fn fetch_info(&mut self) -> Option<DeviceInfo> {
         self.send_line("info");
         let console = self.console.clone();
-        let Some(reader) = self.port.as_mut() else {
-            return None;
-        };
+        let reader = self.port.as_mut()?;
         let mut acc = String::new();
         let deadline = Instant::now() + Duration::from_millis(2_000);
         let mut line = String::new();

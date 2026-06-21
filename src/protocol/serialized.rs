@@ -178,6 +178,10 @@ pub struct CsiPacketHeC6 {
     pub csi_data: Vec<i8>,
 }
 
+// Each argument is one decoded wire field shared by the HE-C5 and HE-C6
+// packet layouts; grouping them into a struct would just duplicate those
+// wire structs, so the flat signature is intentional.
+#[allow(clippy::too_many_arguments)]
 fn he_to_csidata(
     mac: [u8; 6],
     rssi: i32,

@@ -1,4 +1,4 @@
-use super::config::EspConfig;
+use super::config::{EspConfig, WifiMode};
 use crate::protocol::info::ChipFamily;
 
 /// Commands sent from the UI thread to the reader thread via mpsc.
@@ -48,6 +48,17 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
             "set-wifi --sta-password={}",
             quote_for_wire(&cfg.sta_password)
         ));
+    }
+    // `peer-mac` / `ht40` are ESP-NOW-only knobs. Emit them only for the
+    // ESP-NOW modes so other modes don't get spurious set-wifi lines. An
+    // empty `peer-mac` is sent verbatim to clear any prior filter back to
+    // automatic pairing.
+    if matches!(
+        cfg.wifi_mode,
+        WifiMode::EspNowCentral | WifiMode::EspNowPeripheral
+    ) {
+        out.push(format!("set-wifi --peer-mac={}", cfg.peer_mac));
+        out.push(format!("set-wifi --ht40={}", cfg.ht40.cli()));
     }
     out.push(format!("set-traffic --frequency-hz={}", cfg.traffic_hz));
     out.push(format!(
@@ -145,4 +156,57 @@ fn quote_for_wire(s: &str) -> String {
         .map(|c| if c == ' ' { '\u{1F}' } else { c })
         .collect();
     format!("'{}'", encoded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::config::{CsiDelivery, Ht40};
+
+    #[test]
+    fn esp_now_emits_peer_mac_and_ht40() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::EspNowCentral,
+            peer_mac: "aa:bb:cc:dd:ee:ff".into(),
+            ht40: Ht40::Above,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
+        assert!(lines.contains(&"set-wifi --ht40=above".to_string()));
+    }
+
+    #[test]
+    fn esp_now_empty_peer_mac_clears_to_auto() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::EspNowPeripheral,
+            ..Default::default()
+        };
+        // empty peer_mac is still emitted (verbatim) to clear back to auto.
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --peer-mac=".to_string()));
+        assert!(lines.contains(&"set-wifi --ht40=none".to_string()));
+    }
+
+    #[test]
+    fn non_esp_now_omits_peer_mac_and_ht40() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::Sniffer,
+            peer_mac: "aa:bb:cc:dd:ee:ff".into(),
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(!lines.iter().any(|l| l.contains("--peer-mac")));
+        assert!(!lines.iter().any(|l| l.contains("--ht40")));
+    }
+
+    #[test]
+    fn renders_raw_csi_delivery() {
+        let cfg = EspConfig {
+            csi_delivery: CsiDelivery::Raw,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.iter().any(|l| l.starts_with("set-csi-delivery --mode=raw")));
+    }
 }

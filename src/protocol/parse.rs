@@ -318,8 +318,10 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
         },
     };
 
-    let mut c = CsiData::default();
-    c.csi_raw_data = csi;
+    let mut c = CsiData {
+        csi_raw_data: csi,
+        ..Default::default()
+    };
 
     // Fields 0..=7 are common across all chips.
     c.rssi = g_i(1) as i32;

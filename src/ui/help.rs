@@ -1,12 +1,8 @@
+#[derive(Default)]
 pub struct HelpOverlay {
     pub open: bool,
 }
 
-impl Default for HelpOverlay {
-    fn default() -> Self {
-        Self { open: false }
-    }
-}
 
 impl HelpOverlay {
     pub fn show(&mut self, ctx: &egui::Context) {

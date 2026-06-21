@@ -9,8 +9,10 @@ use egui::Color32;
 
 /// Visual severity for the alert window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum AlertKind {
     /// Information / success — neutral chrome.
+    #[default]
     Info,
     /// Error — title rendered in the theme's error red.
     Error,
@@ -26,11 +28,6 @@ pub struct Alert {
     kind: AlertKind,
 }
 
-impl Default for AlertKind {
-    fn default() -> Self {
-        Self::Info
-    }
-}
 
 impl Alert {
     /// Pop up an informational message (e.g. "Imported 800 packets").

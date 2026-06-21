@@ -62,7 +62,7 @@ impl TilingManager {
         // re-resolve focus to nearest existing pane
         let mut panes = Vec::new();
         self.root.collect_panes(&mut panes);
-        if !panes.iter().any(|p| *p == self.focused) {
+        if !panes.contains(&self.focused) {
             self.focused = *panes.first().unwrap_or(&1);
         }
     }

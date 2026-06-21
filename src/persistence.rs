@@ -63,7 +63,7 @@ pub fn save_template(name: &str, tpl: &Template) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
     let s = serde_json::to_string_pretty(tpl)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     fs::write(&path, s)?;
     Ok(path)
 }
@@ -128,7 +128,7 @@ pub fn set_default(name: &str) -> std::io::Result<()> {
         if let Ok(mut tpl) = read_template(&ent.path) {
             tpl.tiling.is_default = ent.name == name;
             let s = serde_json::to_string_pretty(&tpl)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                .map_err(std::io::Error::other)?;
             fs::write(&ent.path, s)?;
         }
     }
@@ -259,7 +259,7 @@ pub fn export_history_json(name: &str, raw: &[crate::data::CsiData]) -> std::io:
     let mut f = std::io::BufWriter::new(fs::File::create(&path)?);
     for p in raw {
         let s = serde_json::to_string(p)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         f.write_all(s.as_bytes())?;
         f.write_all(b"\n")?;
     }
@@ -285,7 +285,7 @@ pub fn export_history_parquet(
 
     let path = export_path(name, "parquet")?;
     let schema = parse_message_type(PARQUET_SCHEMA)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     let props = Arc::new(
         WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
@@ -293,10 +293,10 @@ pub fn export_history_parquet(
     );
     let file = fs::File::create(&path)?;
     let mut writer = SerializedFileWriter::new(file, Arc::new(schema), props)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     let mut rg = writer
         .next_row_group()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
 
     // Pre-materialise each column's vector once — the writer wants one
     // call per column in schema order.
@@ -370,10 +370,10 @@ pub fn export_history_parquet(
     write_column::<ByteArrayType>(&mut rg, cols_byte_tail[0])?;
 
     rg.close()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     writer
         .close()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     Ok(path)
 }
 
@@ -386,18 +386,17 @@ where
 {
     let Some(mut col) = rg
         .next_column()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        .map_err(std::io::Error::other)?
     else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "missing next column in parquet writer",
         ));
     };
     col.typed::<T>()
         .write_batch(values, None, None)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     col.close()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        .map_err(std::io::Error::other)?;
     Ok(())
 }
 

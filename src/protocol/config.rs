@@ -134,6 +134,11 @@ pub enum CsiDelivery {
     Callback,
     /// Async over a bounded channel + dedicated drain task.
     Async,
+    /// Zero-copy fast-path. Stored as a device flag and applied on the
+    /// **next `start`**; while active no CSI data is delivered or logged
+    /// and the `q`-key stop peek is skipped (the run is duration-bound or
+    /// reset-driven). Host views receive nothing in this mode.
+    Raw,
 }
 
 impl CsiDelivery {
@@ -143,6 +148,7 @@ impl CsiDelivery {
             Self::Off => "off",
             Self::Callback => "callback",
             Self::Async => "async",
+            Self::Raw => "raw",
         }
     }
     /// Round-robin to the next delivery mode.
@@ -150,7 +156,41 @@ impl CsiDelivery {
         match self {
             Self::Off => Self::Callback,
             Self::Callback => Self::Async,
-            Self::Async => Self::Off,
+            Self::Async => Self::Raw,
+            Self::Raw => Self::Off,
+        }
+    }
+}
+
+/// Forced ESP-NOW TX HT40 secondary channel (`set-wifi --ht40=…`). Only
+/// meaningful for the ESP-NOW modes; `None` keeps the default HT20/legacy
+/// TX PHY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum Ht40 {
+    /// HT20 / legacy TX PHY (firmware default).
+    #[default]
+    None,
+    /// HT40 with the secondary channel above the primary.
+    Above,
+    /// HT40 with the secondary channel below the primary.
+    Below,
+}
+
+impl Ht40 {
+    /// CLI token used by `set-wifi --ht40=…`.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Above => "above",
+            Self::Below => "below",
+        }
+    }
+    /// Round-robin to the next setting.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::None => Self::Above,
+            Self::Above => Self::Below,
+            Self::Below => Self::None,
         }
     }
 }
@@ -218,6 +258,14 @@ pub struct EspConfig {
     pub sta_ssid: String,
     /// Station-mode PSK (`set-wifi --sta-password=…`). Max 32 bytes.
     pub sta_password: String,
+    /// ESP-NOW peer source MAC filter (`set-wifi --peer-mac=…`). Empty means
+    /// automatic magic-prefix pairing (`auto`). ESP-NOW modes only.
+    #[serde(default)]
+    pub peer_mac: String,
+    /// Forced ESP-NOW TX HT40 secondary channel (`set-wifi --ht40=…`).
+    /// ESP-NOW modes only.
+    #[serde(default)]
+    pub ht40: Ht40,
     /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
     pub traffic_hz: u64,
     /// Collector vs Listener role (`set-collection-mode`).
@@ -277,6 +325,8 @@ impl Default for EspConfig {
             channel: 6,
             sta_ssid: String::new(),
             sta_password: String::new(),
+            peer_mac: String::new(),
+            ht40: Ht40::None,
             traffic_hz: 100,
             collection_mode: CollectionMode::Collector,
             log_mode: LogMode::Serialized,
@@ -326,8 +376,34 @@ impl EspConfig {
         if !valid_channel(self.channel) {
             return Err(format!("invalid channel {}", self.channel));
         }
+        if !valid_peer_mac(&self.peer_mac) {
+            return Err(format!(
+                "invalid peer MAC '{}' (use aa:bb:cc:dd:ee:ff)",
+                self.peer_mac
+            ));
+        }
         Ok(())
     }
+}
+
+/// `true` when `mac` is empty (meaning automatic pairing) or six hex octets
+/// separated by `:` or `-`, mirroring the firmware's `--peer-mac` parser.
+pub fn valid_peer_mac(mac: &str) -> bool {
+    if mac.is_empty() {
+        return true;
+    }
+    let sep = if mac.contains(':') {
+        ':'
+    } else if mac.contains('-') {
+        '-'
+    } else {
+        return false;
+    };
+    let octets: Vec<&str> = mac.split(sep).collect();
+    octets.len() == 6
+        && octets
+            .iter()
+            .all(|o| o.len() == 2 && o.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// `true` when `c` is a 2.4 GHz (1..=14) or 5 GHz (UNII-1/2A/3) channel
@@ -346,6 +422,8 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "Channel",
     "STA SSID",
     "STA Password",
+    "Peer MAC (ESP-NOW)",
+    "HT40 (ESP-NOW)",
     "Traffic Hz",
     "Collection Mode",
     "Log Mode",

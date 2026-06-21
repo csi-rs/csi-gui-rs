@@ -195,11 +195,10 @@ fn render_value(
         }
         2 => {
             let mut s = cfg.sta_ssid.clone();
-            if ui.add(egui::TextEdit::singleline(&mut s).desired_width(240.0)).changed() {
-                if s.len() <= 32 {
+            if ui.add(egui::TextEdit::singleline(&mut s).desired_width(240.0)).changed()
+                && s.len() <= 32 {
                     cfg.sta_ssid = s;
                 }
-            }
         }
         3 => {
             let mut s = cfg.sta_password.clone();
@@ -216,6 +215,33 @@ fn render_value(
             }
         }
         4 => {
+            // Peer MAC — free text; empty means automatic pairing.
+            // `cfg.validate()` surfaces a malformed MAC to the user.
+            ui.horizontal(|ui| {
+                let mut s = cfg.peer_mac.clone();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut s)
+                            .hint_text("auto")
+                            .desired_width(200.0),
+                    )
+                    .changed()
+                {
+                    cfg.peer_mac = s;
+                }
+                ui.label(
+                    egui::RichText::new("aa:bb:cc:dd:ee:ff · blank = auto")
+                        .weak()
+                        .small(),
+                );
+            });
+        }
+        5 => {
+            if ui.button(cfg.ht40.cli()).clicked() {
+                cfg.ht40 = cfg.ht40.cycle();
+            }
+        }
+        6 => {
             let mut s = cfg.traffic_hz.to_string();
             if ui.add(egui::TextEdit::singleline(&mut s).desired_width(120.0)).changed() {
                 if let Ok(v) = s.parse::<u64>() {
@@ -223,12 +249,12 @@ fn render_value(
                 }
             }
         }
-        5 => {
+        7 => {
             if ui.button(cfg.collection_mode.cli()).clicked() {
                 cfg.collection_mode = cfg.collection_mode.cycle();
             }
         }
-        6 => {
+        8 => {
             let suffix = if cfg.log_mode.host_parses() {
                 "(host parses)"
             } else {
@@ -241,32 +267,32 @@ fn render_value(
                 cfg.log_mode = cfg.log_mode.cycle();
             }
         }
-        7 => {
+        9 => {
             if ui.button(cfg.phy_rate.cli()).clicked() {
                 cfg.phy_rate = cfg.phy_rate.cycle();
             }
         }
-        8 => toggle(ui, &mut cfg.tx_task),
-        9 => toggle(ui, &mut cfg.rx_task),
-        10 => {
+        10 => toggle(ui, &mut cfg.tx_task),
+        11 => toggle(ui, &mut cfg.rx_task),
+        12 => {
             if ui.button(cfg.csi_delivery.cli()).clicked() {
                 cfg.csi_delivery = cfg.csi_delivery.cycle();
             }
         }
-        11 => toggle(ui, &mut cfg.csi_logging),
-        12 => toggle(ui, &mut cfg.classic_disable_lltf),
-        13 => toggle(ui, &mut cfg.classic_disable_htltf),
-        14 => toggle(ui, &mut cfg.classic_disable_stbc_htltf),
-        15 => toggle(ui, &mut cfg.classic_disable_ltf_merge),
-        16 => toggle(ui, &mut cfg.he_disable_csi),
-        17 => toggle(ui, &mut cfg.he_disable_csi_legacy),
-        18 => toggle(ui, &mut cfg.he_disable_csi_ht20),
-        19 => toggle(ui, &mut cfg.he_disable_csi_ht40),
-        20 => toggle(ui, &mut cfg.he_disable_csi_su),
-        21 => toggle(ui, &mut cfg.he_disable_csi_mu),
-        22 => toggle(ui, &mut cfg.he_disable_csi_dcm),
-        23 => toggle(ui, &mut cfg.he_disable_csi_beamformed),
-        24 => {
+        13 => toggle(ui, &mut cfg.csi_logging),
+        14 => toggle(ui, &mut cfg.classic_disable_lltf),
+        15 => toggle(ui, &mut cfg.classic_disable_htltf),
+        16 => toggle(ui, &mut cfg.classic_disable_stbc_htltf),
+        17 => toggle(ui, &mut cfg.classic_disable_ltf_merge),
+        18 => toggle(ui, &mut cfg.he_disable_csi),
+        19 => toggle(ui, &mut cfg.he_disable_csi_legacy),
+        20 => toggle(ui, &mut cfg.he_disable_csi_ht20),
+        21 => toggle(ui, &mut cfg.he_disable_csi_ht40),
+        22 => toggle(ui, &mut cfg.he_disable_csi_su),
+        23 => toggle(ui, &mut cfg.he_disable_csi_mu),
+        24 => toggle(ui, &mut cfg.he_disable_csi_dcm),
+        25 => toggle(ui, &mut cfg.he_disable_csi_beamformed),
+        26 => {
             let mut s = cfg.he_stbc.to_string();
             if ui.add(egui::TextEdit::singleline(&mut s).desired_width(60.0)).changed() {
                 if let Ok(v) = s.parse::<u32>() {
@@ -276,7 +302,7 @@ fn render_value(
                 }
             }
         }
-        25 => {
+        27 => {
             let mut s = cfg.he_val_scale_cfg.to_string();
             if ui.add(egui::TextEdit::singleline(&mut s).desired_width(60.0)).changed() {
                 if let Ok(v) = s.parse::<u32>() {
@@ -286,7 +312,7 @@ fn render_value(
                 }
             }
         }
-        26 => {
+        28 => {
             let mut s = cfg
                 .start_duration_sec
                 .map(|v| v.to_string())
