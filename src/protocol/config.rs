@@ -512,6 +512,29 @@ impl Default for EspConfig {
 }
 
 impl EspConfig {
+    /// Apply the firmware's HE20 (802.11ax HE-LTF-only) acquisition layout in
+    /// one shot, mirroring `esp_csi_rs::config::CsiConfig::he20()` and
+    /// csi-webserver-rs's `CsiConfigSection::he20_preset`: legacy / HT20 / HT40
+    /// off, SU / MU / DCM / beamformed on, STBC and val-scale at 2, ACK dump and
+    /// the C5-only L-LTF / VHT captures off. Also sets [`CsiPreset::He20`] so the
+    /// emitted `set-csi` collapses to `--preset=he20`.
+    pub fn apply_he20_preset(&mut self) {
+        self.csi_preset = CsiPreset::He20;
+        self.he_csi_en = true;
+        self.he_csi_legacy_en = false;
+        self.he_csi_ht20_en = false;
+        self.he_csi_ht40_en = false;
+        self.he_csi_su_en = true;
+        self.he_csi_mu_en = true;
+        self.he_csi_dcm_en = true;
+        self.he_csi_beamformed_en = true;
+        self.he_stbc = 2;
+        self.he_val_scale_cfg = 2;
+        self.csi_dump_ack = false;
+        self.c5_csi_force_lltf = false;
+        self.c5_csi_vht = false;
+    }
+
     /// Validate string-field lengths / formats before sending. SSIDs/passwords
     /// > 32 bytes would panic the device (`heapless::String::push_str().unwrap()`).
     pub fn validate(&self) -> Result<(), String> {

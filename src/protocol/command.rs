@@ -41,7 +41,11 @@ pub enum EspCommand {
 pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     out.push(format!("set-wifi --mode={}", cfg.wifi_mode.cli()));
-    out.push(format!("set-wifi --set-channel={}", cfg.channel));
+    // In Station mode the channel follows the associated AP, so the firmware
+    // ignores an explicit channel — omit it (mirrors csi-webserver-rs).
+    if cfg.wifi_mode != WifiMode::Station {
+        out.push(format!("set-wifi --set-channel={}", cfg.channel));
+    }
     if !cfg.sta_ssid.is_empty() {
         out.push(format!(
             "set-wifi --sta-ssid={}",
@@ -219,6 +223,38 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(!lines.iter().any(|l| l.contains("--peer-mac")));
         assert!(!lines.iter().any(|l| l.contains("--ht40")));
+    }
+
+    #[test]
+    fn station_mode_omits_set_channel() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::Station,
+            channel: 6,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(!lines.iter().any(|l| l.contains("--set-channel")));
+    }
+
+    #[test]
+    fn non_station_mode_emits_set_channel() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::Sniffer,
+            channel: 6,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --set-channel=6".to_string()));
+    }
+
+    #[test]
+    fn he20_preset_collapses_to_single_flag() {
+        let mut cfg = EspConfig::default();
+        cfg.apply_he20_preset();
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32C6);
+        assert!(lines.contains(&"set-csi --preset=he20".to_string()));
+        // The verbose per-flag `set-csi --csi=…` line must not also appear.
+        assert!(!lines.iter().any(|l| l.starts_with("set-csi --csi=")));
     }
 
     #[test]

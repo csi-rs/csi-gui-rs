@@ -59,6 +59,9 @@ pub fn config_grid(
         .striped(true)
         .show(ui, |ui| {
             for (i, label) in ESP_CONFIG_FIELDS.iter().enumerate() {
+                if !field_visible(i, mode) {
+                    continue;
+                }
                 let enabled = field_enabled(i, mode);
                 ui.add_enabled_ui(enabled, |ui| {
                     ui.label(*label);
@@ -81,6 +84,18 @@ pub fn commit_and_validate(
     commit_channel(cfg, channel_buf);
     commit_numeric_fields(cfg, field_bufs);
     cfg.validate()
+}
+
+/// Whether the config row at `idx` is shown at all for the current
+/// [`WifiMode`]. The channel is assigned by the associated AP in Station
+/// mode, so its row is hidden there (and omitted from the pushed config).
+/// Indices must track `ESP_CONFIG_FIELDS`.
+fn field_visible(idx: usize, mode: WifiMode) -> bool {
+    match idx {
+        // Channel
+        2 => mode != WifiMode::Station,
+        _ => true,
+    }
 }
 
 /// Whether the config row at `idx` (index into `ESP_CONFIG_FIELDS`) applies
@@ -356,13 +371,23 @@ fn render_value(
             }
         }
         33 => {
-            enum_combo(
-                ui,
-                "csi_preset",
-                &mut cfg.csi_preset,
-                &CsiPreset::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
+            // One-button HE20 layout: applies the full HE-LTF-only preset in a
+            // single click (mirrors csi-webserver-rs). Clicking while active
+            // reverts to the default preset, leaving the HE toggles editable.
+            let active = cfg.csi_preset == CsiPreset::He20;
+            let label = if active {
+                "HE20 preset ✓ — click to clear"
+            } else {
+                "Apply HE20 preset"
+            };
+            if ui.button(label).clicked() {
+                if active {
+                    cfg.csi_preset = CsiPreset::Default;
+                } else {
+                    cfg.apply_he20_preset();
+                }
+                shared.mark_config_dirty();
+            }
         }
         34 => toggle(ui, &mut cfg.csi_dump_ack, shared),
         35 => toggle(ui, &mut cfg.c5_csi_force_lltf, shared),

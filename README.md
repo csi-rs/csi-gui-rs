@@ -33,6 +33,7 @@ It's the difference between *running an experiment* and *debugging your tooling*
 
 - **Auto-connect** to the first available serial port, with hardware DTR/RTS reset, banner identification, and graceful handling of hot-unplugs.
 - **Auto config sync** — on every connect the GUI's full `EspConfig` is pushed to the firmware, so the device's wire format (default `LogMode::Serialized`) matches what the host expects from the very first packet.
+- **Mode-aware device config panel** — the full `set-*` surface as typed dropdowns, toggles, and numeric fields. Rows that don't apply to the selected Wi-Fi mode are greyed out (STA/AP credentials, ESP-NOW peer MAC/HT40), and the channel field is hidden entirely in Station mode (the AP assigns it). A one-click **HE20 preset** button applies the full 802.11ax HE-LTF-only acquisition layout. See [Device configuration](#device-configuration).
 - **All firmware log modes decode**: `text`, `array-list`, `serialized` (COBS-framed postcard — both classic-chip and ESP32-C5/C6 schemas), and `esp-csi-tool` (Hernandez 26-column CSV).
 - **Live visualizations** (any of which can be split into multiple tiles side-by-side; every pane carries a large `#N` id badge for keyboard focus shortcuts 1..9 / 0):
   - **Dashboard** — PPS, SNR, RSSI, firmware status at a glance.
@@ -106,6 +107,45 @@ csi-gui-rs --rerun=spawn                 # launch a Rerun viewer
 csi-gui-rs --rerun=file:logs/run1.rrd    # record to an RRD file
 csi-gui-rs --help
 ```
+
+---
+
+## Device configuration
+
+The ESP panel's **Configuration** section is a typed front-end for the firmware's
+`set-*` command surface. Every field maps 1:1 to a command that
+[`esp-csi-cli-rs`](https://github.com/connectedmotion-io/esp-csi-cli-rs)
+understands; edits stay local until you press **Save & Apply**, which validates
+the whole config and pushes it to the device in one batch.
+
+**Mode-aware fields.** Selecting a **Wi-Fi Mode** reshapes the panel so you only
+see knobs that take effect:
+
+- **Station** — STA SSID / password are enabled; the **Channel** field is
+  *hidden*, because the channel follows the associated AP (the GUI omits
+  `set-wifi --set-channel` in this mode).
+- **Wi-Fi AP** — AP SSID / password / DHCP are enabled.
+- **ESP-NOW** (central / peripheral / fast-collector / fast-source) — Peer MAC
+  and HT40 secondary-channel are enabled.
+- **Sniffer** and the other modes grey out the credentials they don't use.
+
+**One-click HE20 preset.** On ESP32-C5/C6 firmware, the **Apply HE20 preset**
+button (in the *HE: CSI preset* row) lays out the entire HE-LTF-only
+acquisition profile in a single click — legacy / HT20 / HT40 captures off;
+SU / MU / DCM / beamformed on; STBC and value-scale at 2; ACK-dump and the
+C5-only L-LTF / VHT captures off. This mirrors `csi-webserver-rs`'s HE20 preset
+and collapses the pushed config to `set-csi --preset=he20`. Click it again
+(**HE20 preset ✓ — click to clear**) to drop back to the default preset, leaving
+the individual HE toggles editable.
+
+**Buttons.**
+
+- **Save & Apply** — validate + push the full config (SSID length, MAC format,
+  channel range, STBC/scale bounds). Disabled hints appear while a collection is
+  running; stop first.
+- **Reset to defaults** — send `reset-config` to restore the firmware defaults.
+- **Advanced** — fire raw `show-config`, `show-stats`, and `info` commands and
+  read the replies in the Console pane.
 
 ---
 
