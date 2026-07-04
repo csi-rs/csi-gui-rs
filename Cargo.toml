@@ -42,7 +42,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 csv = "1.3"
 # Parquet read/write without pulling in the full arrow dependency.
-parquet = { version = "55", default-features = false, features = ["snap"] }
+parquet = { version = "59", default-features = false, features = ["snap"] }
 
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
