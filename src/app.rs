@@ -176,6 +176,13 @@ pub struct App {
     /// pipeline. Cleared whenever the user changes [`Self::preprocess`]
     /// so the new config doesn't see stale samples.
     preprocess_buffer: VecDeque<crate::data::CsiData>,
+    /// Reused each pump tick to avoid allocating a fresh packet batch.
+    packet_batch: Vec<crate::data::CsiData>,
+    /// JSONL writer — auto-starts/stops with collection.
+    recorder: persistence::SessionRecorder,
+    /// When true, an active collection session streams JSONL to `exports/`.
+    pub record_on_capture: bool,
+    was_recording: bool,
     pub text_prompt: TextPrompt,
     pub template_picker: TemplatePicker,
     pub quit_confirm_open: bool,
@@ -190,8 +197,8 @@ impl App {
     /// Construct the app and spawn the reader thread.
     ///
     /// - `baud` — serial baud rate. ESP-CSI-CLI defaults to 115200.
-    /// - `history_size` — ring-buffer capacity (number of per-tick stats
-    ///   to retain).
+    /// - `history_size` — in-memory tick window for plots/replay (~100 ms per
+    ///   tick). Full per-packet capture streams to JSONL on Start.
     /// - `rerun_transport` — Rerun sink mode. Use [`Transport::Off`] to
     ///   disable.
     ///
@@ -245,6 +252,10 @@ impl App {
             alert: Alert::default(),
             preprocess: startup.preprocess,
             preprocess_buffer: VecDeque::with_capacity(PREPROCESS_CONTEXT),
+            packet_batch: Vec::new(),
+            recorder: persistence::SessionRecorder::default(),
+            record_on_capture: false,
+            was_recording: false,
             text_prompt: TextPrompt::default(),
             template_picker: TemplatePicker::default(),
             quit_confirm_open: false,
@@ -281,6 +292,40 @@ impl App {
         self.cur_shared().is_collecting.load(Ordering::Acquire)
     }
 
+    /// Start/stop the JSONL session recorder when the user has enabled recording.
+    fn sync_collection_recording(&mut self, imported: bool) {
+        let should_record =
+            self.record_on_capture && self.is_collecting() && !imported;
+        if should_record && !self.was_recording {
+            let label = self
+                .active_session()
+                .map(|s| s.port.clone())
+                .unwrap_or_else(|| "session".into());
+            self.start_session_recording(label);
+        } else if !should_record && self.was_recording {
+            if let Some(summary) = self.recorder.stop() {
+                self.alert.open_info(
+                    "Recording saved",
+                    format!(
+                        "Wrote {} packets to:\n{}",
+                        summary.packets_written,
+                        summary.path.display()
+                    ),
+                );
+            } else if let Some(err) = self.recorder.last_error() {
+                self.alert.open_error("Recording error", err.to_string());
+            }
+        }
+        self.was_recording = should_record;
+    }
+
+    fn start_session_recording(&mut self, label: String) {
+        match self.recorder.start(&label) {
+            Ok(path) => log::info!("recording to {}", path.display()),
+            Err(e) => self.alert.open_error("Recording failed", e.to_string()),
+        }
+    }
+
     fn pump_reader(&mut self) {
         // Drain state/info for EVERY session so each device's status stays
         // live. On a fresh entry into `Streaming` we push that device's full
@@ -315,6 +360,12 @@ impl App {
 
         self.advance_replay();
 
+        let imported = self
+            .active_session()
+            .map(|s| s.imported_recording)
+            .unwrap_or(false);
+        self.sync_collection_recording(imported);
+
         if self.last_tick.elapsed() < Duration::from_millis(100) {
             return;
         }
@@ -330,23 +381,27 @@ impl App {
 
         // Active session: feed the history/views (unchanged behaviour).
         if let Some(ai) = active {
-            let (batch, raw_delta, imported) = {
-                let s = &self.sessions[ai];
-                let raw_before = s.shared.frames_total.load(Ordering::Relaxed);
-                let mut batch = Vec::new();
-                while let Ok(p) = s.reader.packets.try_recv() {
-                    batch.push(p);
-                }
-                let raw_after = s.shared.frames_total.load(Ordering::Relaxed);
-                (batch, raw_after.saturating_sub(raw_before), s.imported_recording)
-            };
-            for p in &batch {
+            let s = &self.sessions[ai];
+            let raw_before = s.shared.frames_total.load(Ordering::Relaxed);
+            self.packet_batch.clear();
+            while let Ok(p) = s.reader.packets.try_recv() {
+                self.packet_batch.push(p);
+            }
+            let raw_after = s.shared.frames_total.load(Ordering::Relaxed);
+            let raw_delta = raw_after.saturating_sub(raw_before);
+            let imported = s.imported_recording;
+
+            for p in &self.packet_batch {
                 self.rerun.log_packet(p);
             }
             // While replaying an imported recording we drop live packets so
             // they can't overwrite the history the user is inspecting.
             if !imported {
+                let batch = std::mem::take(&mut self.packet_batch);
                 let processed = self.preprocess_incoming(batch);
+                if self.recorder.is_recording() {
+                    self.recorder.append_batch(&processed);
+                }
                 if let Some(stats) = self.history.push_tick(processed, raw_delta) {
                     self.rerun.log_tick(stats);
                 }
@@ -784,16 +839,45 @@ impl App {
                 let _ = persistence::save_template(&name, &tpl);
             }
             TextPromptResult::SubmitExport(name, fmt) => {
-                // history.raw_history already holds the post-preprocessing
-                // packets that were captured live, so the export is
-                // exactly what the visualisations have been showing —
-                // no retroactive rewriting. Format comes straight from
-                // the radio row in the prompt; the filename is just
-                // the stem (the format-specific extension and
-                // `_<unix>` get appended downstream).
-                let raw: Vec<_> = self.history.raw_history.iter().cloned().collect();
-                let stem = filename_stem_for_export(&name);
-                let _ = persistence::export_history(&stem, &raw, fmt);
+                if self.recorder.is_recording() {
+                    if let Some(path) = self.recorder.path() {
+                        self.alert.open_info(
+                            "Recording in progress",
+                            format!(
+                                "Per-packet JSONL is being written to:\n{}\n\n{} packets so far. \
+                                 Stop collection to finalize the file.",
+                                path.display(),
+                                self.recorder.packets_written()
+                            ),
+                        );
+                    }
+                } else if let Some(rec) = self.recorder.last_recording() {
+                    self.alert.open_info(
+                        "Session recording",
+                        format!(
+                            "Full per-packet JSONL capture:\n{}\n\n{} packets. \
+                             Use Import Data (Replay) to load this file.",
+                            rec.path.display(),
+                            rec.packets_written
+                        ),
+                    );
+                } else if !self.history.raw_history.is_empty() {
+                    let raw: Vec<_> = self.history.raw_history.iter().cloned().collect();
+                    let stem = filename_stem_for_export(&name);
+                    match persistence::export_history(&stem, &raw, fmt) {
+                        Ok(path) => self.alert.open_info(
+                            "Export complete",
+                            format!("Wrote {}", path.display()),
+                        ),
+                        Err(e) => self.alert.open_error("Export failed", e.to_string()),
+                    }
+                } else {
+                    self.alert.open_info(
+                        "Nothing to export",
+                        "Enable Record to JSONL during collection, \
+                         or import a capture to re-export.",
+                    );
+                }
             }
             TextPromptResult::Submit(name, TextPromptPurpose::RerunConnect) => {
                 self.rerun.set_transport(parse_host_port(&name));
@@ -1250,6 +1334,32 @@ impl App {
                     .small(),
             );
 
+            if self.preprocess.is_active() {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("preprocess: {}", self.preprocess.summary()))
+                        .weak()
+                        .small(),
+                )
+                .on_hover_text("M → Preprocessing… to edit filters");
+            }
+
+            if self.recorder.is_recording() {
+                ui.separator();
+                let n = self.recorder.packets_written();
+                let path_hint = self
+                    .recorder
+                    .path()
+                    .and_then(|p| p.file_name())
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("…");
+                ui.label(
+                    egui::RichText::new(format!("record: {n} pkts → {path_hint}"))
+                        .weak()
+                        .small(),
+                );
+            }
+
             #[cfg(feature = "rerun")]
             {
                 ui.separator();
@@ -1535,6 +1645,15 @@ impl App {
             egui::CollapsingHeader::new("Capture")
                 .default_open(true)
                 .show(ui, |ui| {
+                    ui.checkbox(
+                        &mut self.record_on_capture,
+                        "Record to JSONL (exports/)",
+                    )
+                    .on_hover_text(
+                        "When enabled, post-preprocess packets are streamed to \
+                         exports/<port>_<time>.jsonl for the duration of collection.",
+                    );
+                    ui.add_space(4.0);
                     let config_applied = self.sessions[ai].shared.is_config_applied();
                     let start_enabled =
                         is_collecting || (device_ready && !imported && config_applied);
@@ -1568,6 +1687,45 @@ impl App {
                             });
                         }
                         mark_boundary = true;
+                    }
+                    if self.recorder.is_recording() {
+                        if let Some(path) = self.recorder.path() {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Recording → {} ({} pkts)",
+                                    path.file_name()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("…"),
+                                    self.recorder.packets_written()
+                                ))
+                                .weak()
+                                .small(),
+                            );
+                        }
+                    } else if let Some(rec) = self.recorder.last_recording() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Last recording: {} ({} pkts)",
+                                rec.path.file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("…"),
+                                rec.packets_written
+                            ))
+                            .weak()
+                            .small(),
+                        )
+                        .on_hover_text(rec.path.display().to_string());
+                    } else {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                "Enable \"Record to JSONL\" to save full captures under exports/",
+                            )
+                            .weak()
+                            .small(),
+                        );
                     }
                 });
 

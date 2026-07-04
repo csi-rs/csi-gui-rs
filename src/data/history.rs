@@ -3,10 +3,11 @@ use super::stats::{NetworkStats, GRID_SIZE};
 use std::collections::VecDeque;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// Default in-memory packet history capacity (per [`History::new`]).
+/// Default in-memory **tick** window capacity (per [`History::new`]).
 ///
 /// Override via [`History::with_capacity`] or the binary's `--history-size`
-/// flag. At 100 PPS this caps memory growth to ~10 minutes by default.
+/// flag. At 10 Hz ticks this is ~16 minutes of scrubber range by default.
+/// Per-packet captures stream to JSONL during collection — not held here.
 pub const DEFAULT_HISTORY_CAP: usize = 10_000;
 
 /// UI aggregation tick, in milliseconds. The reader thread runs at hardware
@@ -17,34 +18,18 @@ pub const TICK_MS: u64 = 100;
 /// Number of ticks the PPS rolling-average window covers.
 pub const PPS_WINDOW_TICKS: usize = 10;
 
-/// Bounded ring buffer of per-tick aggregates plus a per-packet raw history
-/// used for CSV export.
+/// Bounded ring buffer of per-tick aggregates for live plots and replay.
 ///
 /// `History` grows at 10 Hz (one [`NetworkStats`] per [`TICK_MS`]) regardless
-/// of how fast packets are arriving. The internal [`VecDeque`]s are capped at
-/// `cap` (see [`Self::with_capacity`]); oldest entries are dropped first.
-///
-/// IDs in `NetworkStats` are monotonically increasing and stable for the
-/// lifetime of the buffer — once a packet has an id it keeps it, even if it
-/// later falls off the back. This is what makes the global replay anchor
-/// (`Option<u64>`) work.
-///
-/// # Example
-///
-/// ```
-/// use csi_gui_rs::data::{CsiData, History};
-///
-/// let mut h = History::with_capacity(1_000);
-/// let mut pkt = CsiData::default();
-/// pkt.csi_raw_data = vec![1, 2, 3, 4];     // 2 subcarriers, gets decoded
-/// h.push_tick(vec![pkt], 1);
-/// assert_eq!(h.entries.len(), 1);
-/// assert_eq!(h.last_id(), Some(0));
-/// ```
+/// of how fast packets are arriving. Full per-packet captures are written to
+/// disk when optional recording is enabled ([`crate::persistence::SessionRecorder`]); only
+/// tick aggregates live in RAM.
 pub struct History {
     pub entries: VecDeque<NetworkStats>,
+    /// Populated only by [`Self::load_from_packets`] (import/replay). Live
+    /// capture does not retain per-packet data here.
     pub raw_history: VecDeque<CsiData>,
-    pub grid: [[f32; GRID_SIZE]; GRID_SIZE],
+    grid: [[f32; GRID_SIZE]; GRID_SIZE],
     pps_window: VecDeque<u64>,
     next_id: u64,
     started: Instant,
@@ -60,19 +45,15 @@ impl Default for History {
 }
 
 impl History {
-    /// Construct a `History` with the default capacity ([`DEFAULT_HISTORY_CAP`]).
     pub fn new() -> Self {
         Self::with_capacity(DEFAULT_HISTORY_CAP)
     }
 
-    /// Construct a `History` capped at `cap` entries. A `cap` of 0 is
-    /// promoted to 1 (so `entries.back()` is always meaningful once data
-    /// arrives).
     pub fn with_capacity(cap: usize) -> Self {
         let cap = cap.max(1);
         Self {
             entries: VecDeque::with_capacity(cap),
-            raw_history: VecDeque::with_capacity(cap),
+            raw_history: VecDeque::new(),
             grid: [[0.0; GRID_SIZE]; GRID_SIZE],
             pps_window: VecDeque::with_capacity(PPS_WINDOW_TICKS),
             next_id: 0,
@@ -83,23 +64,18 @@ impl History {
         }
     }
 
-    /// Configured ring-buffer capacity.
     pub fn capacity(&self) -> usize {
         self.cap
     }
 
-    /// Smallest id still resident in the buffer, or `None` if empty.
     pub fn first_id(&self) -> Option<u64> {
         self.entries.front().map(|s| s.id)
     }
 
-    /// Largest id resident in the buffer (i.e. the head — "now"), or `None`
-    /// if empty.
     pub fn last_id(&self) -> Option<u64> {
         self.entries.back().map(|s| s.id)
     }
 
-    /// Drop all history and reset the id counter to 0.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.raw_history.clear();
@@ -111,15 +87,6 @@ impl History {
         self.started = Instant::now();
     }
 
-    /// Bulk-load an imported recording into the buffer as if every
-    /// packet had been received live, one per tick. Used by the file
-    /// importer ([`crate::persistence::import_history`]) when the user
-    /// loads a previously exported `.csv` / `.jsonl` / `.parquet`
-    /// capture to replay it.
-    ///
-    /// Existing history is dropped first; entries are appended in the
-    /// order they appear in `packets`, with `next_id` advancing per
-    /// packet so the replay scrubber sees one tick per packet.
     pub fn load_from_packets(&mut self, packets: Vec<CsiData>) {
         self.clear();
         for p in packets.into_iter().filter(|p| p.is_decoded()) {
@@ -139,7 +106,7 @@ impl History {
                 snr,
                 timestamp: self.next_id * TICK_MS,
                 csi: Some(p),
-                distribution_grid: self.grid,
+                distribution_grid: [[0.0; GRID_SIZE]; GRID_SIZE],
             };
             self.next_id += 1;
             if self.entries.len() == self.cap {
@@ -150,10 +117,6 @@ impl History {
         self.frames_decoded_total = self.entries.len() as u64;
     }
 
-    /// Push one 100 ms tick of packets.
-    ///
-    /// `raw_frames_delta` is `EspSharedState::frames_total` delta this tick,
-    /// used only to compute the diagnostic `raw_fps`.
     pub fn push_tick(&mut self, batch: Vec<CsiData>, raw_frames_delta: u64) -> Option<&NetworkStats> {
         let decoded: Vec<CsiData> = batch.into_iter().filter(|p| p.is_decoded()).collect();
         let decoded_count = decoded.len();
@@ -179,10 +142,6 @@ impl History {
 
         for p in &decoded {
             NetworkStats::accumulate_grid(&mut self.grid, p);
-            if self.raw_history.len() == self.cap {
-                self.raw_history.pop_front();
-            }
-            self.raw_history.push_back(p.clone());
         }
 
         let avg = CsiData::average(&decoded);
@@ -200,7 +159,7 @@ impl History {
             snr,
             timestamp: timestamp_ms,
             csi: avg,
-            distribution_grid: self.grid,
+            distribution_grid: [[0.0; GRID_SIZE]; GRID_SIZE],
         };
         self.next_id += 1;
 
@@ -211,17 +170,17 @@ impl History {
         self.entries.back()
     }
 
-    /// Most-recent tick aggregate ("LIVE"), or `None` if empty.
     pub fn last(&self) -> Option<&NetworkStats> {
         self.entries.back()
     }
 
-    /// Look up a specific tick by id. `O(N)`; fine for replay scrubbing.
     pub fn get(&self, id: u64) -> Option<&NetworkStats> {
-        self.entries.iter().find(|s| s.id == id)
+        self.entries
+            .binary_search_by(|s| s.id.cmp(&id))
+            .ok()
+            .map(|i| &self.entries[i])
     }
 
-    /// Resolve a per-pane anchor — `None` means "live" (head).
     pub fn resolve_anchor(&self, anchor: Option<u64>) -> Option<&NetworkStats> {
         match anchor {
             Some(id) => self.get(id),
@@ -229,7 +188,6 @@ impl History {
         }
     }
 
-    /// `count` most recent entries up to and including `anchor` (or head).
     pub fn window_ending_at(&self, anchor: Option<u64>, count: usize) -> Vec<&NetworkStats> {
         let end_id = match anchor {
             Some(id) => id,
@@ -247,5 +205,36 @@ impl History {
             .into_iter()
             .rev()
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_packet(seed: i32) -> CsiData {
+        let mut p = CsiData::default();
+        p.csi_raw_data = vec![seed, 0];
+        p.data_length = 2;
+        p
+    }
+
+    #[test]
+    fn push_tick_does_not_retain_raw_packets() {
+        let mut h = History::with_capacity(32);
+        let batch: Vec<CsiData> = (0..20).map(make_packet).collect();
+        h.push_tick(batch, 20);
+        assert!(h.raw_history.is_empty());
+        assert_eq!(h.entries.len(), 1);
+    }
+
+    #[test]
+    fn get_uses_binary_search() {
+        let mut h = History::with_capacity(100);
+        for i in 0..50 {
+            h.push_tick(vec![make_packet(i)], 1);
+        }
+        assert!(h.get(25).is_some());
+        assert!(h.get(999).is_none());
     }
 }

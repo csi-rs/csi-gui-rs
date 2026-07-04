@@ -20,7 +20,7 @@ CSI is a goldmine for Wi-Fi sensing — gesture detection, presence sensing, cha
 - **High-resolution 2D plots** with axes, zoom, pan, and tooltips — not terminal art.
 - **All four firmware log modes** (`text`, `array-list`, `serialized`, `esp-csi-tool`) decode to a single in-memory schema, so the visualizations look identical no matter which wire format you pick.
 - **Ten built-in visualizations** that cover the workflow from "is anything moving?" to "what does subcarrier 24's phase look like across the last 400 packets?"
-- **Live preprocessing pipeline** with Interpolation, Detrending, and Feature-Scaling stages baked into newly captured packets — toggling a filter never retroactively rewrites the past.
+- **Live preprocessing pipeline** with Interpolation, Denoising, Detrending, and Feature-Scaling stages baked into newly captured packets — toggling a filter never retroactively rewrites the past.
 - **Replay any moment** with a global timeline scrubber — every pane jumps back together.
 - **Export to CSV, JSONL, or Parquet** for pandas / MATLAB / Spark, or to **Rerun** for time-anchored, scrubbable offline analysis. **Import** any of those formats back into the GUI to replay an old capture without an ESP plugged in.
 - **A console pane** that shows the raw firmware UART, so you're never wondering why nothing's showing up.
@@ -45,11 +45,18 @@ It's the difference between *running an experiment* and *debugging your tooling*
   - **I/Q scatter** — every (I, Q) sample for the last *N* packets, density via alpha overlap.
   - **Console** — raw UART text capture with command echo for visibility into the firmware.
   - **Replay** — global timeline scrubber + play/pause + speed.
-- **Preprocessing pipeline** (Preprocessing… in the **M** menu): three stages applied at capture time so the past stays immutable — Interpolation (Linear / Nearest-Neighbour), Detrending (Least-Squares Baseline / Moving-Average Trend), Feature Scaling (Min-Max / Z-Score / Quantize). All three stages preserve packet cardinality.
+- **Preprocessing pipeline** (Preprocessing… in the **M** menu): four stages applied at capture time so the past stays immutable:
+  - **Interpolation** — Linear / Nearest-Neighbour
+  - **Denoising & filters** — Rolling mean, Rolling median, Savitzky–Golay, Hampel (MAD), Butterworth low-pass, Wavelet DWT (Haar), FFT delay (CIR multipath removal)
+  - **Detrending** — Least-Squares Baseline / Moving-Average Trend
+  - **Feature Scaling** — Min-Max / Z-Score / Quantize
+  - Segmentation (activity gating) is planned for a follow-up release.
+  All stages preserve packet cardinality.
 - **Tiling layout** — split panes horizontally / vertically, fullscreen one, save the whole workspace (layout + theme + preprocessing config + per-pane view knobs) as a named template.
 - **Theme picker** (5 built-in: Dark, Light, Nordic, Gruvbox, Catppuccin). Pick directly from the menu, or press **T** to cycle.
 - **Global replay** — scrubber + play / pause + speed; every pane follows the same anchor.
-- **Multi-format export** (`Export Data` in the menu) — write captured packets to **CSV** (Hernandez-style 23 columns), **JSONL** (one `CsiData` per line), or **Parquet** (Snappy-compressed). Format is inferred from the filename extension you type (`.csv` / `.jsonl` / `.parquet`); anything else defaults to CSV.
+- **Optional JSONL recording** — enable **Record to JSONL** in the ESP panel before Start to stream every post-preprocess packet to `exports/<port>_<time>.jsonl`. RAM holds only a bounded tick window for plots (`--history-size`).
+- **Multi-format export** (`Export Data` in the menu) — re-export imported captures to **CSV**, **JSONL**, or **Parquet**, or view the path of the last auto-recording.
 - **Multi-format import** (`Import Data (Replay)`) — load any of the three exported formats back into history. The GUI snaps into replay mode so you can scrub through an old capture without hardware. Disabled while a live collection is in progress.
 - **Rerun integration** *(optional `--features rerun`)* — spawn a viewer, connect to a running one, or save `.rrd` files for offline replay. UI is hidden in the no-feature build, so it never clutters the menu when you don't need it.
 - **Bundled symbol font** — Adwaita Sans Regular (SIL OFL 1.1) is shipped as a last-resort font fallback so Unicode arrows, ▶, ● and friends render correctly out of the box.
@@ -87,13 +94,14 @@ The release profile maximises optimisation — `opt-level=3` + `lto="fat"` + `pa
 4. Click **ESP → Start Collection** (or pick *Start Collection* from the **M** menu — disabled until a recognised device is identified).
 5. Hit **Enter** to switch the focused pane to **Magnitude**, **Phase**, **Spectrogram**, **Evolution**, or any other view. Use **Shift+Arrow** to split the pane and show multiple views side-by-side.
 6. Press **Enter → Replay** to add a scrubber pane. Drag the slider; all live panes rewind together. Press **R** to snap back to LIVE.
-7. **M → Export Data** writes the current capture to `exports/` — type a filename with the extension you want (`run42.csv`, `run42.jsonl`, `run42.parquet`).
-8. **M → Import Data (Replay)** loads any previously exported file back into history and parks you in replay mode (requires that collection is stopped).
+6. **▶ Start Collection** in the ESP panel begins capture. Optionally check **Record to JSONL** first to save the full per-packet stream under `exports/`. Plots use the in-memory tick window only.
+7. **M → Export Data** — shows the last session recording path, or re-exports an **imported** capture to CSV/JSONL/Parquet.
+8. **M → Import Data (Replay)** loads a JSONL/CSV/Parquet file into history for replay (requires that collection is stopped).
 
 ```sh
 # Common flags:
 csi-gui-rs --baud=115200                 # default
-csi-gui-rs --history-size=50000          # keep more packets in memory
+csi-gui-rs --history-size=5000           # tick window for plots/replay (~8 min at 10 Hz)
 csi-gui-rs --rerun=spawn                 # launch a Rerun viewer
 csi-gui-rs --rerun=file:logs/run1.rrd    # record to an RRD file
 csi-gui-rs --help

@@ -52,7 +52,16 @@ impl HelpOverlay {
                     "Add a Replay pane (Enter → Replay) for a scrubber, play/pause, and speed \
                      control. While the replay anchor is set, every pane (Dashboard, Polar, \
                      Phase, Spectrogram, CIR, I/Q density) follows it. Press R or ⏭ Live to \
-                     return everything to LIVE.",
+                     return everything to LIVE. Replay covers the in-memory tick window only; \
+                     full per-packet history is in the auto JSONL recording.",
+                );
+                ui.separator();
+                ui.label(egui::RichText::new("Recording").strong());
+                ui.label(
+                    "Enable \"Record to JSONL\" in the ESP panel Capture section before \
+                     Start to stream every post-preprocess packet to exports/<port>_<time>.jsonl. \
+                     RAM holds only the tick window for plots (--history-size). Stop collection \
+                     to finalize the file; use Import Data to replay a recording.",
                 );
                 #[cfg(feature = "rerun")]
                 {

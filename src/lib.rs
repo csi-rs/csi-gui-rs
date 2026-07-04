@@ -18,9 +18,9 @@
 //!   `info` command, and decodes CSI in any of four wire formats (text,
 //!   serialized/COBS, array-list, esp-csi-tool CSV). All formats normalize
 //!   into the same [`CsiData`] struct.
-//! - **In-memory ring buffer** ([`History`]) holds the last *N* per-tick
-//!   aggregates; configurable via [`data::DEFAULT_HISTORY_CAP`] or the
-//!   `--history-size` CLI flag.
+//! - **In-memory tick window** ([`History`]) holds per-100 ms aggregates for
+//!   live plots; configurable via [`data::DEFAULT_HISTORY_CAP`] or
+//!   `--history-size`. Optional JSONL recording streams full captures to disk.
 //! - **Visualizations** in [`views`] use [`egui_plot`](https://docs.rs/egui_plot)
 //!   for high-resolution 2D rendering. Every plot is flat 2D — no fake 3D
 //!   rotations — and exposes proper axes, zoom, pan, and tooltips.

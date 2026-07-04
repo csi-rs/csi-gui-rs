@@ -5,6 +5,12 @@
 //! directory) and CSV/JSON/Parquet exports in `exports/`. The CSV
 //! schema is uniform across every supported wire format — see
 //! [`CSV_COLUMNS`].
+//!
+//! Live collection can optionally stream full per-packet JSONL via [`SessionRecorder`].
+
+pub mod recording;
+
+pub use recording::{RecordingSummary, SessionRecorder};
 
 use crate::data::PreprocessConfig;
 use crate::layout::TilingManager;
@@ -582,14 +588,12 @@ mod showcase_template_tests {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 mod export_roundtrip_tests {
     use super::*;
     use crate::data::CsiData;
-    use std::sync::Mutex;
-
-    // export_history* writes into the CWD-relative `exports/` directory,
-    // so tests that exercise it have to serialise their CWD swap.
-    static CWD_LOCK: Mutex<()> = Mutex::new(());
 
     fn sample_packet(seed: i32) -> CsiData {
         let mut p = CsiData::default();
@@ -606,7 +610,7 @@ mod export_roundtrip_tests {
     }
 
     fn roundtrip(format: ExportFormat) -> Vec<CsiData> {
-        let _guard = CWD_LOCK.lock().unwrap();
+        let _guard = TEST_CWD_LOCK.lock().unwrap();
         let tmp = std::env::temp_dir().join(format!("csi-gui-rs-test-{:?}", format));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();

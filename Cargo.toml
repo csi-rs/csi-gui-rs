@@ -52,6 +52,8 @@ regex = "1"
 anyhow = "1"
 thiserror = "2.0.18"
 
+savgol-rs = "0.1"
+
 rerun = { version = "0.32", optional = true, default-features = false, features = ["sdk"] }
 
 # Native file-picker for the Import flow.

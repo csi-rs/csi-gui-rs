@@ -56,7 +56,7 @@ fn print_usage() {
     eprintln!("options:");
     eprintln!("  --baud=N | -b N           serial baud rate (default {DEFAULT_BAUD})");
     eprintln!(
-        "  --history-size=N          in-memory packet history capacity (default {DEFAULT_HISTORY_CAP})"
+        "  --history-size=N          in-memory tick window for plots/replay (default {DEFAULT_HISTORY_CAP}; ~100 ms/tick)"
     );
     eprintln!("  --rerun=MODE              rerun sink: off (default), spawn, connect[:host:port],");
     eprintln!("                            or file:PATH. Requires --features rerun at build time.");
