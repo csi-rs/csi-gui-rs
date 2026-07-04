@@ -74,6 +74,10 @@ pub struct DeviceInfo {
     /// Wire-protocol version. Compared against [`SUPPORTED_PROTOCOL`]
     /// to decide whether the host understands this firmware build.
     pub protocol: u32,
+    /// Device MAC (uppercase, colon-separated). Emitted as the `mac=`
+    /// line when the firmware advertises protocol ≥ 2; `None` on older
+    /// builds. Used as a stable device identity.
+    pub mac: Option<String>,
     /// Feature tags advertised by the firmware (e.g. `statistics`,
     /// `async-print`). Treated as opaque — the host stores them so
     /// views can opt into firmware-side capabilities.
@@ -87,6 +91,7 @@ impl Default for DeviceInfo {
             version: String::new(),
             chip: ChipFamily::Unknown,
             protocol: 0,
+            mac: None,
             features: HashSet::new(),
         }
     }
@@ -94,7 +99,9 @@ impl Default for DeviceInfo {
 
 /// Wire-protocol version this build of the GUI understands. Compared
 /// against [`DeviceInfo::protocol`] in [`DeviceInfo::protocol_supported`].
-pub const SUPPORTED_PROTOCOL: u32 = 1;
+/// Bumped 1 → 2 for esp-csi-cli-rs v0.6.0+ (adds the `mac=` info line and
+/// the v0.7.x command surface).
+pub const SUPPORTED_PROTOCOL: u32 = 2;
 
 impl DeviceInfo {
     /// Parse `key=value` lines emitted between the banner and `END-INFO`.
@@ -112,6 +119,11 @@ impl DeviceInfo {
                     "version" => info.version = v.to_string(),
                     "chip" => info.chip = ChipFamily::parse(v),
                     "protocol" => info.protocol = v.parse().unwrap_or(0),
+                    "mac" => {
+                        if !v.is_empty() {
+                            info.mac = Some(v.to_ascii_uppercase());
+                        }
+                    }
                     "features" => {
                         info.features = v
                             .split(',')

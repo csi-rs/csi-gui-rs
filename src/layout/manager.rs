@@ -3,6 +3,51 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_PANES: usize = 10;
 
+/// One-click tiling arrangements offered by the layout picker. These are
+/// guided shortcuts on top of the free-form split engine — every preset
+/// just builds a concrete [`LayoutNode`] tree that the user can still
+/// tweak afterwards with the per-pane split/close controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutPreset {
+    Single,
+    TwoColumns,
+    TwoRows,
+    ThreeColumns,
+    Grid2x2,
+}
+
+impl LayoutPreset {
+    /// Presets shown in the picker, in display order.
+    pub const ALL: [LayoutPreset; 5] = [
+        LayoutPreset::Single,
+        LayoutPreset::TwoColumns,
+        LayoutPreset::TwoRows,
+        LayoutPreset::ThreeColumns,
+        LayoutPreset::Grid2x2,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            LayoutPreset::Single => "Single",
+            LayoutPreset::TwoColumns => "Two columns",
+            LayoutPreset::TwoRows => "Two rows",
+            LayoutPreset::ThreeColumns => "Three columns",
+            LayoutPreset::Grid2x2 => "2 × 2 grid",
+        }
+    }
+
+    /// Small ASCII sketch of the arrangement for the picker button.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            LayoutPreset::Single => "▭",
+            LayoutPreset::TwoColumns => "▏▏",
+            LayoutPreset::TwoRows => "☰",
+            LayoutPreset::ThreeColumns => "▏▏▏",
+            LayoutPreset::Grid2x2 => "田",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TilingManager {
     pub root: LayoutNode,
@@ -62,7 +107,7 @@ impl TilingManager {
         // re-resolve focus to nearest existing pane
         let mut panes = Vec::new();
         self.root.collect_panes(&mut panes);
-        if !panes.iter().any(|p| *p == self.focused) {
+        if !panes.contains(&self.focused) {
             self.focused = *panes.first().unwrap_or(&1);
         }
     }
@@ -90,6 +135,68 @@ impl TilingManager {
 
     pub fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
+    }
+
+    /// Replace the whole layout with a [`LayoutPreset`] arrangement.
+    ///
+    /// The current panes' views are collected in DFS order and reassigned
+    /// to the new panes in the same order (padding with [`ViewType::Empty`]
+    /// once the preset has more panes than the old layout), so switching
+    /// arrangements keeps showing what the user was looking at wherever it
+    /// fits. Panes are numbered 1..=N and focus resets to the first pane.
+    pub fn apply_preset(&mut self, preset: LayoutPreset) {
+        let mut old_ids = Vec::new();
+        self.root.collect_panes(&mut old_ids);
+        let mut views = old_ids
+            .iter()
+            .filter_map(|id| self.root.find_view(*id))
+            .collect::<Vec<_>>()
+            .into_iter();
+
+        let mut next_id = 0usize;
+        let mut mk = || {
+            next_id += 1;
+            LayoutNode::Pane {
+                id: next_id,
+                view: views.next().unwrap_or(ViewType::Empty),
+            }
+        };
+
+        let split = |direction, ratio, children| LayoutNode::Split {
+            direction,
+            ratio,
+            children,
+        };
+
+        self.root = match preset {
+            LayoutPreset::Single => mk(),
+            LayoutPreset::TwoColumns => {
+                split(SplitDirection::Horizontal, 50, vec![mk(), mk()])
+            }
+            LayoutPreset::TwoRows => {
+                split(SplitDirection::Vertical, 50, vec![mk(), mk()])
+            }
+            // Left third + two equal thirds on the right (33 / 33.5 / 33.5).
+            LayoutPreset::ThreeColumns => split(
+                SplitDirection::Horizontal,
+                33,
+                vec![
+                    mk(),
+                    split(SplitDirection::Horizontal, 50, vec![mk(), mk()]),
+                ],
+            ),
+            LayoutPreset::Grid2x2 => split(
+                SplitDirection::Horizontal,
+                50,
+                vec![
+                    split(SplitDirection::Vertical, 50, vec![mk(), mk()]),
+                    split(SplitDirection::Vertical, 50, vec![mk(), mk()]),
+                ],
+            ),
+        };
+
+        self.focused = 1;
+        self.fullscreen = false;
     }
 
     fn max_id(&self) -> usize {

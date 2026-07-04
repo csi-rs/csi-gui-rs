@@ -77,6 +77,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let n_pkts = window.len().max(1);
 
     Plot::new("iq_scatter")
+        .height(super::plot_height(ctx.plot_budget))
         .data_aspect(1.0)
         .x_axis_label("I")
         .y_axis_label("Q")

@@ -1,4 +1,4 @@
-use super::config::EspConfig;
+use super::config::{EspConfig, LogMode};
 use crate::protocol::info::ChipFamily;
 
 /// Commands sent from the UI thread to the reader thread via mpsc.
@@ -11,6 +11,8 @@ pub enum EspCommand {
         /// Auto-stop after `N` seconds. `None` runs until the user
         /// sends [`EspCommand::Stop`].
         duration_sec: Option<u64>,
+        /// Wire format to sync via `set-log-mode` immediately before `start`.
+        log_mode: LogMode,
     },
     /// Stop collection (`q`).
     Stop,
@@ -25,6 +27,9 @@ pub enum EspCommand {
     Raw(String),
     /// Open / re-open the named port.
     OpenPort(String),
+    /// Soft firmware reboot via the `restart` command (device re-emits its
+    /// banner, so the reader re-identifies afterwards).
+    Restart,
     /// Quit the reader thread.
     Shutdown,
 }
@@ -49,7 +54,29 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
             quote_for_wire(&cfg.sta_password)
         ));
     }
-    out.push(format!("set-traffic --frequency-hz={}", cfg.traffic_hz));
+    if !cfg.ap_ssid.is_empty() {
+        out.push(format!("set-wifi --ap-ssid={}", quote_for_wire(&cfg.ap_ssid)));
+    }
+    if !cfg.ap_password.is_empty() {
+        out.push(format!(
+            "set-wifi --ap-password={}",
+            quote_for_wire(&cfg.ap_password)
+        ));
+    }
+    out.push(format!("set-wifi --ap-dhcp={}", on_off(cfg.ap_dhcp)));
+    // Empty peer-mac clears to auto on the firmware; only send when set so
+    // we don't stomp an existing pairing with an empty value on every apply.
+    if !cfg.peer_mac.trim().is_empty() {
+        out.push(format!("set-wifi --peer-mac={}", cfg.peer_mac.trim()));
+    }
+    out.push(format!("set-wifi --ht40={}", cfg.ht40.cli()));
+
+    out.push(format!("set-protocol --protocol={}", cfg.protocol.cli()));
+    out.push(format!(
+        "set-traffic --frequency-hz={} --unsolicited={}",
+        cfg.traffic_hz,
+        on_off(cfg.traffic_unsolicited)
+    ));
     out.push(format!(
         "set-collection-mode --mode={}",
         cfg.collection_mode.cli()
@@ -66,52 +93,44 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         on_off(cfg.csi_logging)
     ));
 
+    // `set-csi` flags are positive on|off toggles (fw v0.7.x). Emit all of
+    // them so a feature turned off earlier gets re-enabled without a
+    // reset-config.
     if chip.is_classic() {
-        let mut parts = vec!["set-csi".to_string()];
-        if cfg.classic_disable_lltf {
-            parts.push("--disable-lltf".into());
-        }
-        if cfg.classic_disable_htltf {
-            parts.push("--disable-htltf".into());
-        }
-        if cfg.classic_disable_stbc_htltf {
-            parts.push("--disable-stbc-htltf".into());
-        }
-        if cfg.classic_disable_ltf_merge {
-            parts.push("--disable-ltf-merge".into());
-        }
-        if parts.len() > 1 {
+        out.push(format!(
+            "set-csi --lltf={} --htltf={} --stbc-htltf={} --ltf-merge={}",
+            on_off(cfg.classic_lltf_en),
+            on_off(cfg.classic_htltf_en),
+            on_off(cfg.classic_stbc_htltf_en),
+            on_off(cfg.classic_ltf_merge_en),
+        ));
+    } else if chip.is_he() {
+        // The `he20` preset overrides the individual acquisition flags on the
+        // firmware side, so send it alone; otherwise send the explicit flags.
+        if cfg.csi_preset == crate::protocol::config::CsiPreset::He20 {
+            out.push("set-csi --preset=he20".to_string());
+        } else {
+            let mut parts = vec![
+                "set-csi".to_string(),
+                format!("--csi={}", on_off(cfg.he_csi_en)),
+                format!("--csi-legacy={}", on_off(cfg.he_csi_legacy_en)),
+                format!("--csi-ht20={}", on_off(cfg.he_csi_ht20_en)),
+                format!("--csi-ht40={}", on_off(cfg.he_csi_ht40_en)),
+                format!("--csi-su={}", on_off(cfg.he_csi_su_en)),
+                format!("--csi-mu={}", on_off(cfg.he_csi_mu_en)),
+                format!("--csi-dcm={}", on_off(cfg.he_csi_dcm_en)),
+                format!("--csi-beamformed={}", on_off(cfg.he_csi_beamformed_en)),
+                format!("--csi-he-stbc={}", cfg.he_stbc),
+                format!("--val-scale-cfg={}", cfg.he_val_scale_cfg),
+                format!("--dump-ack={}", on_off(cfg.csi_dump_ack)),
+            ];
+            // C5-only acquisition toggles.
+            if chip == ChipFamily::Esp32C5 {
+                parts.push(format!("--csi-force-lltf={}", on_off(cfg.c5_csi_force_lltf)));
+                parts.push(format!("--csi-vht={}", on_off(cfg.c5_csi_vht)));
+            }
             out.push(parts.join(" "));
         }
-    } else if chip.is_he() {
-        let mut parts = vec!["set-csi".to_string()];
-        if cfg.he_disable_csi {
-            parts.push("--disable-csi".into());
-        }
-        if cfg.he_disable_csi_legacy {
-            parts.push("--disable-csi-legacy".into());
-        }
-        if cfg.he_disable_csi_ht20 {
-            parts.push("--disable-csi-ht20".into());
-        }
-        if cfg.he_disable_csi_ht40 {
-            parts.push("--disable-csi-ht40".into());
-        }
-        if cfg.he_disable_csi_su {
-            parts.push("--disable-csi-su".into());
-        }
-        if cfg.he_disable_csi_mu {
-            parts.push("--disable-csi-mu".into());
-        }
-        if cfg.he_disable_csi_dcm {
-            parts.push("--disable-csi-dcm".into());
-        }
-        if cfg.he_disable_csi_beamformed {
-            parts.push("--disable-csi-beamformed".into());
-        }
-        parts.push(format!("--csi-he-stbc={}", cfg.he_stbc));
-        parts.push(format!("--val-scale-cfg={}", cfg.he_val_scale_cfg));
-        out.push(parts.join(" "));
     }
 
     out.push(format!("set-log-mode --mode={}", cfg.log_mode.cli()));
@@ -125,6 +144,11 @@ pub fn render_start(duration_sec: Option<u64>) -> String {
         Some(d) => format!("start --duration={d}"),
         None => "start".to_string(),
     }
+}
+
+/// Render the `restart` command line (soft firmware reboot).
+pub fn render_restart() -> String {
+    "restart".to_string()
 }
 
 fn on_off(b: bool) -> &'static str {

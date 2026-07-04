@@ -3,6 +3,11 @@
 //! The types here mirror the firmware's `UserConfig` surface and
 //! cycle/serialize/render-as-CLI on demand. They are the GUI's
 //! source-of-truth for what gets pushed to the device with `ApplyConfig`.
+//!
+//! Grammar matches esp-csi-cli-rs v0.7.x (protocol 2): `set-csi` flags are
+//! positive `on|off` toggles (not the old `--disable-*` booleans), and the
+//! surface includes AP mode, ESP-NOW fast modes, `set-protocol`, unsolicited
+//! traffic, `raw` CSI delivery, CSI presets, and C5-only toggles.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,30 +18,135 @@ pub enum WifiMode {
     Station,
     /// Promiscuous capture without association.
     Sniffer,
+    /// Self-contained softAP CSI collector (DHCP + ICMP flood).
+    WifiAp,
     /// ESP-NOW initiator role.
     EspNowCentral,
     /// ESP-NOW peripheral role.
     EspNowPeripheral,
+    /// Asymmetric ESP-NOW simplex collector (sparse beacon, then RX-only).
+    EspNowFastCollector,
+    /// Asymmetric ESP-NOW simplex source (unicast flood at forced PHY).
+    EspNowFastSource,
 }
 
 impl WifiMode {
+    pub const ALL: [WifiMode; 7] = [
+        WifiMode::Station,
+        WifiMode::Sniffer,
+        WifiMode::WifiAp,
+        WifiMode::EspNowCentral,
+        WifiMode::EspNowPeripheral,
+        WifiMode::EspNowFastCollector,
+        WifiMode::EspNowFastSource,
+    ];
+
     /// CLI token used by `set-wifi --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Station => "station",
             Self::Sniffer => "sniffer",
+            Self::WifiAp => "wifi-ap",
             Self::EspNowCentral => "esp-now-central",
             Self::EspNowPeripheral => "esp-now-peripheral",
+            Self::EspNowFastCollector => "esp-now-fast-collector",
+            Self::EspNowFastSource => "esp-now-fast-source",
         }
     }
-    /// Round-robin to the next mode (used by the config overlay's
+    /// Round-robin to the next mode (used by the config panel's
     /// click-to-cycle button).
     pub fn cycle(self) -> Self {
         match self {
             Self::Sniffer => Self::Station,
-            Self::Station => Self::EspNowCentral,
+            Self::Station => Self::WifiAp,
+            Self::WifiAp => Self::EspNowCentral,
             Self::EspNowCentral => Self::EspNowPeripheral,
-            Self::EspNowPeripheral => Self::Sniffer,
+            Self::EspNowPeripheral => Self::EspNowFastCollector,
+            Self::EspNowFastCollector => Self::EspNowFastSource,
+            Self::EspNowFastSource => Self::Sniffer,
+        }
+    }
+}
+
+/// Wi-Fi PHY protocol (`set-protocol --protocol=…`). Firmware default is `lr`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(missing_docs)] // each variant maps 1:1 to a CLI token
+pub enum WifiProtocol {
+    B,
+    G,
+    N,
+    Lr,
+    A,
+    Ac,
+    Ax,
+}
+
+impl WifiProtocol {
+    pub const ALL: [WifiProtocol; 7] = [
+        WifiProtocol::B,
+        WifiProtocol::G,
+        WifiProtocol::N,
+        WifiProtocol::Lr,
+        WifiProtocol::A,
+        WifiProtocol::Ac,
+        WifiProtocol::Ax,
+    ];
+
+    /// CLI token used by `set-protocol --protocol=…`.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::B => "b",
+            Self::G => "g",
+            Self::N => "n",
+            Self::Lr => "lr",
+            Self::A => "a",
+            Self::Ac => "ac",
+            Self::Ax => "ax",
+        }
+    }
+    /// Round-robin to the next protocol.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::B => Self::G,
+            Self::G => Self::N,
+            Self::N => Self::Lr,
+            Self::Lr => Self::A,
+            Self::A => Self::Ac,
+            Self::Ac => Self::Ax,
+            Self::Ax => Self::B,
+        }
+    }
+}
+
+/// Forced ESP-NOW HT40 transmit secondary channel (`set-wifi --ht40=…`).
+/// `None` reverts to HT20/legacy per rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Ht40 {
+    /// HT20 / legacy (the `none` token).
+    None,
+    /// Secondary channel above the primary.
+    Above,
+    /// Secondary channel below the primary.
+    Below,
+}
+
+impl Ht40 {
+    pub const ALL: [Ht40; 3] = [Ht40::None, Ht40::Above, Ht40::Below];
+
+    /// CLI token used by `set-wifi --ht40=…`.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Above => "above",
+            Self::Below => "below",
+        }
+    }
+    /// Round-robin to the next option.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::None => Self::Above,
+            Self::Above => Self::Below,
+            Self::Below => Self::None,
         }
     }
 }
@@ -52,6 +162,8 @@ pub enum CollectionMode {
 }
 
 impl CollectionMode {
+    pub const ALL: [CollectionMode; 2] = [CollectionMode::Collector, CollectionMode::Listener];
+
     /// CLI token used by `set-collection-mode --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
@@ -85,6 +197,13 @@ pub enum LogMode {
 }
 
 impl LogMode {
+    pub const ALL: [LogMode; 4] = [
+        LogMode::Serialized,
+        LogMode::Text,
+        LogMode::ArrayList,
+        LogMode::EspCsiTool,
+    ];
+
     /// CLI token used by `set-log-mode --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
@@ -115,7 +234,7 @@ impl LogMode {
     }
     /// `true` when the host has a working decoder for this mode.
     /// All four are supported today; the method is kept so the
-    /// status badge in the config overlay can stay generic.
+    /// status badge in the config panel can stay generic.
     pub fn host_parses(self) -> bool {
         matches!(
             self,
@@ -134,15 +253,26 @@ pub enum CsiDelivery {
     Callback,
     /// Async over a bounded channel + dedicated drain task.
     Async,
+    /// Zero-copy fast-path — applies on next `start`; no CSI data is
+    /// delivered to the host (throughput benchmark only).
+    Raw,
 }
 
 impl CsiDelivery {
+    pub const ALL: [CsiDelivery; 4] = [
+        CsiDelivery::Off,
+        CsiDelivery::Callback,
+        CsiDelivery::Async,
+        CsiDelivery::Raw,
+    ];
+
     /// CLI token used by `set-csi-delivery --mode=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Off => "off",
             Self::Callback => "callback",
             Self::Async => "async",
+            Self::Raw => "raw",
         }
     }
     /// Round-robin to the next delivery mode.
@@ -150,7 +280,37 @@ impl CsiDelivery {
         match self {
             Self::Off => Self::Callback,
             Self::Callback => Self::Async,
-            Self::Async => Self::Off,
+            Self::Async => Self::Raw,
+            Self::Raw => Self::Off,
+        }
+    }
+}
+
+/// CSI acquisition preset (`set-csi --preset=…`). `He20` applies the
+/// firmware's HE-LTF-only preset, overriding the individual HE flags.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CsiPreset {
+    /// No preset — the individual `set-csi` flags apply.
+    Default,
+    /// HE-LTF-only preset (`he20`).
+    He20,
+}
+
+impl CsiPreset {
+    pub const ALL: [CsiPreset; 2] = [CsiPreset::Default, CsiPreset::He20];
+
+    /// CLI token used by `set-csi --preset=…`.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::He20 => "he20",
+        }
+    }
+    /// Round-robin to the next preset.
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Default => Self::He20,
+            Self::He20 => Self::Default,
         }
     }
 }
@@ -206,11 +366,17 @@ impl PhyRate {
 ///
 /// Each field maps 1:1 to a `set-*` CLI command — see
 /// [`crate::protocol::command::render_apply_config`] for the exact
-/// rendering. Field grouping mirrors the config-overlay UI.
+/// rendering. Field grouping mirrors the ESP config panel.
+///
+/// The CSI feature flags are **enable-sense** (`true` = feature on),
+/// matching the firmware's positive `--lltf=on|off` grammar. All default
+/// to `true` (the firmware default is "all CSI features on").
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EspConfig {
     /// Wi-Fi operating mode (`set-wifi --mode=…`).
     pub wifi_mode: WifiMode,
+    /// Wi-Fi PHY protocol (`set-protocol --protocol=…`).
+    pub protocol: WifiProtocol,
     /// Primary channel (`set-wifi --set-channel=…`). Must satisfy
     /// [`valid_channel`].
     pub channel: u8,
@@ -218,8 +384,20 @@ pub struct EspConfig {
     pub sta_ssid: String,
     /// Station-mode PSK (`set-wifi --sta-password=…`). Max 32 bytes.
     pub sta_password: String,
+    /// SoftAP SSID (`set-wifi --ap-ssid=…`). Max 32 bytes.
+    pub ap_ssid: String,
+    /// SoftAP password (`set-wifi --ap-password=…`, empty = open). Max 32 bytes.
+    pub ap_password: String,
+    /// Serve DHCP in AP mode (`set-wifi --ap-dhcp=on|off`).
+    pub ap_dhcp: bool,
+    /// ESP-NOW explicit peer MAC (`set-wifi --peer-mac=…`). Empty = auto.
+    pub peer_mac: String,
+    /// ESP-NOW forced HT40 TX PHY (`set-wifi --ht40=…`).
+    pub ht40: Ht40,
     /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
     pub traffic_hz: u64,
+    /// One-directional unsolicited ICMP-reply flood (`set-traffic --unsolicited=…`).
+    pub traffic_unsolicited: bool,
     /// Collector vs Listener role (`set-collection-mode`).
     pub collection_mode: CollectionMode,
     /// Wire format for emitted CSI packets (`set-log-mode`).
@@ -235,35 +413,43 @@ pub struct EspConfig {
     /// Master switch for CSI logging (`set-csi-delivery --logging=…`).
     pub csi_logging: bool,
 
-    /// Classic chips: disable Legacy-LTF capture (`set-csi --disable-lltf`).
-    pub classic_disable_lltf: bool,
-    /// Classic chips: disable HT-LTF capture (`--disable-htltf`).
-    pub classic_disable_htltf: bool,
-    /// Classic chips: disable STBC-HT-LTF capture (`--disable-stbc-htltf`).
-    pub classic_disable_stbc_htltf: bool,
-    /// Classic chips: disable LTF merging (`--disable-ltf-merge`).
-    pub classic_disable_ltf_merge: bool,
+    /// Classic chips: capture Legacy-LTF (`set-csi --lltf=on|off`).
+    pub classic_lltf_en: bool,
+    /// Classic chips: capture HT-LTF (`--htltf=on|off`).
+    pub classic_htltf_en: bool,
+    /// Classic chips: capture STBC-HT-LTF (`--stbc-htltf=on|off`).
+    pub classic_stbc_htltf_en: bool,
+    /// Classic chips: LTF merging (`--ltf-merge=on|off`).
+    pub classic_ltf_merge_en: bool,
 
-    /// ESP32-C5/C6: disable CSI entirely (`set-csi --disable-csi`).
-    pub he_disable_csi: bool,
-    /// ESP32-C5/C6: disable legacy-format CSI (`--disable-csi-legacy`).
-    pub he_disable_csi_legacy: bool,
-    /// ESP32-C5/C6: disable HT20 CSI (`--disable-csi-ht20`).
-    pub he_disable_csi_ht20: bool,
-    /// ESP32-C5/C6: disable HT40 CSI (`--disable-csi-ht40`).
-    pub he_disable_csi_ht40: bool,
-    /// ESP32-C5/C6: disable HE-SU CSI (`--disable-csi-su`).
-    pub he_disable_csi_su: bool,
-    /// ESP32-C5/C6: disable HE-MU CSI (`--disable-csi-mu`).
-    pub he_disable_csi_mu: bool,
-    /// ESP32-C5/C6: disable HE-DCM CSI (`--disable-csi-dcm`).
-    pub he_disable_csi_dcm: bool,
-    /// ESP32-C5/C6: disable beamformed-CSI capture (`--disable-csi-beamformed`).
-    pub he_disable_csi_beamformed: bool,
+    /// ESP32-C5/C6: master CSI acquisition switch (`set-csi --csi=on|off`).
+    pub he_csi_en: bool,
+    /// ESP32-C5/C6: L-LTF on 11g PPDU (`--csi-legacy=on|off`).
+    pub he_csi_legacy_en: bool,
+    /// ESP32-C5/C6: HT-LTF on HT20 PPDU (`--csi-ht20=on|off`).
+    pub he_csi_ht20_en: bool,
+    /// ESP32-C5/C6: HT-LTF on HT40 PPDU (`--csi-ht40=on|off`).
+    pub he_csi_ht40_en: bool,
+    /// ESP32-C5/C6: HE-LTF on HE20 SU PPDU (`--csi-su=on|off`).
+    pub he_csi_su_en: bool,
+    /// ESP32-C5/C6: HE-LTF on HE20 MU PPDU (`--csi-mu=on|off`).
+    pub he_csi_mu_en: bool,
+    /// ESP32-C5/C6: HE-LTF on HE20 DCM PPDU (`--csi-dcm=on|off`).
+    pub he_csi_dcm_en: bool,
+    /// ESP32-C5/C6: HE-LTF on HE20 beamformed PPDU (`--csi-beamformed=on|off`).
+    pub he_csi_beamformed_en: bool,
     /// ESP32-C5/C6: STBC mode 0..=2 (`--csi-he-stbc=…`).
     pub he_stbc: u32,
     /// ESP32-C5/C6: value-scale config 0..=3 (`--val-scale-cfg=…`).
     pub he_val_scale_cfg: u32,
+    /// ESP32-C5/C6: CSI acquisition preset (`--preset=…`).
+    pub csi_preset: CsiPreset,
+    /// ESP32-C5/C6: dump 802.11 ACK frames (`--dump-ack=on|off`).
+    pub csi_dump_ack: bool,
+    /// ESP32-C5 only: force L-LTF acquisition (`--csi-force-lltf=on|off`).
+    pub c5_csi_force_lltf: bool,
+    /// ESP32-C5 only: VHT-LTF on VHT20 PPDU (`--csi-vht=on|off`).
+    pub c5_csi_vht: bool,
 
     /// Auto-stop after this many seconds (`start --duration=N`). `None`
     /// means "run until user sends `q`".
@@ -274,10 +460,17 @@ impl Default for EspConfig {
     fn default() -> Self {
         Self {
             wifi_mode: WifiMode::Sniffer,
+            protocol: WifiProtocol::Lr,
             channel: 6,
             sta_ssid: String::new(),
             sta_password: String::new(),
+            ap_ssid: "esp-csi-ap".to_string(),
+            ap_password: String::new(),
+            ap_dhcp: true,
+            peer_mac: String::new(),
+            ht40: Ht40::None,
             traffic_hz: 100,
+            traffic_unsolicited: false,
             collection_mode: CollectionMode::Collector,
             log_mode: LogMode::Serialized,
             phy_rate: PhyRate::Mcs0Lgi,
@@ -286,21 +479,25 @@ impl Default for EspConfig {
             csi_delivery: CsiDelivery::Callback,
             csi_logging: true,
 
-            classic_disable_lltf: false,
-            classic_disable_htltf: false,
-            classic_disable_stbc_htltf: false,
-            classic_disable_ltf_merge: false,
+            classic_lltf_en: true,
+            classic_htltf_en: true,
+            classic_stbc_htltf_en: true,
+            classic_ltf_merge_en: true,
 
-            he_disable_csi: false,
-            he_disable_csi_legacy: false,
-            he_disable_csi_ht20: false,
-            he_disable_csi_ht40: false,
-            he_disable_csi_su: false,
-            he_disable_csi_mu: false,
-            he_disable_csi_dcm: false,
-            he_disable_csi_beamformed: false,
-            he_stbc: 0,
-            he_val_scale_cfg: 0,
+            he_csi_en: true,
+            he_csi_legacy_en: true,
+            he_csi_ht20_en: true,
+            he_csi_ht40_en: true,
+            he_csi_su_en: true,
+            he_csi_mu_en: true,
+            he_csi_dcm_en: true,
+            he_csi_beamformed_en: true,
+            he_stbc: 2,
+            he_val_scale_cfg: 2,
+            csi_preset: CsiPreset::Default,
+            csi_dump_ack: true,
+            c5_csi_force_lltf: true,
+            c5_csi_vht: true,
 
             start_duration_sec: None,
         }
@@ -308,14 +505,23 @@ impl Default for EspConfig {
 }
 
 impl EspConfig {
-    /// Validate string-field lengths before sending. SSIDs/passwords > 32 bytes
-    /// would panic the device (`heapless::String::push_str().unwrap()`).
+    /// Validate string-field lengths / formats before sending. SSIDs/passwords
+    /// > 32 bytes would panic the device (`heapless::String::push_str().unwrap()`).
     pub fn validate(&self) -> Result<(), String> {
         if self.sta_ssid.len() > 32 {
-            return Err("SSID exceeds 32 bytes".into());
+            return Err("STA SSID exceeds 32 bytes".into());
         }
         if self.sta_password.len() > 32 {
-            return Err("Password exceeds 32 bytes".into());
+            return Err("STA password exceeds 32 bytes".into());
+        }
+        if self.ap_ssid.len() > 32 {
+            return Err("AP SSID exceeds 32 bytes".into());
+        }
+        if self.ap_password.len() > 32 {
+            return Err("AP password exceeds 32 bytes".into());
+        }
+        if !self.peer_mac.trim().is_empty() && parse_mac(&self.peer_mac).is_none() {
+            return Err("Peer MAC must be aa:bb:cc:dd:ee:ff".into());
         }
         if self.he_stbc > 2 {
             return Err("CSI STBC must be 0..=2".into());
@@ -332,7 +538,7 @@ impl EspConfig {
 
 /// `true` when `c` is a 2.4 GHz (1..=14) or 5 GHz (UNII-1/2A/3) channel
 /// number the firmware will accept. Used to gate the channel-picker in
-/// the config overlay and to fail `EspConfig::validate` early.
+/// the config panel and to fail `EspConfig::validate` early.
 pub fn valid_channel(c: u8) -> bool {
     matches!(
         c,
@@ -340,13 +546,35 @@ pub fn valid_channel(c: u8) -> bool {
     )
 }
 
-/// Display-ordered list of fields. Matches the TUI's `ESP_CONFIG_FIELDS`.
+/// Parse an `aa:bb:cc:dd:ee:ff` MAC into six bytes. Case-insensitive;
+/// returns `None` on any malformed input. Used to validate `--peer-mac`.
+pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    if parts.len() != 6 {
+        return None;
+    }
+    let mut out = [0u8; 6];
+    for (i, p) in parts.iter().enumerate() {
+        out[i] = u8::from_str_radix(p.trim(), 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Display-ordered list of fields. The index of each label here MUST match
+/// the arm order in [`crate::ui::esp_panel`]'s `render_value`.
 pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "WiFi Mode",
+    "WiFi Protocol",
     "Channel",
     "STA SSID",
     "STA Password",
+    "AP SSID",
+    "AP Password",
+    "AP DHCP",
+    "Peer MAC (ESP-NOW)",
+    "HT40 (ESP-NOW)",
     "Traffic Hz",
+    "Traffic Unsolicited",
     "Collection Mode",
     "Log Mode",
     "PHY Rate (ESP-NOW)",
@@ -354,19 +582,23 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "RX Task",
     "CSI Delivery",
     "CSI Logging",
-    "Classic: disable LLTF",
-    "Classic: disable HT-LTF",
-    "Classic: disable STBC-HT-LTF",
-    "Classic: disable LTF-merge",
-    "HE: disable CSI",
-    "HE: disable CSI legacy",
-    "HE: disable CSI HT20",
-    "HE: disable CSI HT40",
-    "HE: disable CSI SU",
-    "HE: disable CSI MU",
-    "HE: disable CSI DCM",
-    "HE: disable CSI beamformed",
+    "Classic: LLTF",
+    "Classic: HT-LTF",
+    "Classic: STBC-HT-LTF",
+    "Classic: LTF-merge",
+    "HE: CSI",
+    "HE: CSI legacy",
+    "HE: CSI HT20",
+    "HE: CSI HT40",
+    "HE: CSI SU",
+    "HE: CSI MU",
+    "HE: CSI DCM",
+    "HE: CSI beamformed",
     "HE: CSI STBC (0..2)",
     "HE: val_scale_cfg (0..3)",
+    "HE: CSI preset",
+    "HE: dump ACK",
+    "C5: force LLTF",
+    "C5: VHT",
     "Start duration (sec, blank = ∞)",
 ];

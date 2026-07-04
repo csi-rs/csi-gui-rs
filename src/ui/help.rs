@@ -1,11 +1,6 @@
+#[derive(Default)]
 pub struct HelpOverlay {
     pub open: bool,
-}
-
-impl Default for HelpOverlay {
-    fn default() -> Self {
-        Self { open: false }
-    }
 }
 
 impl HelpOverlay {
@@ -33,6 +28,24 @@ impl HelpOverlay {
                         ui.label(*v);
                     });
                 }
+                ui.separator();
+                ui.label(egui::RichText::new("Panels & panes").strong());
+                ui.label(
+                    "Every pane has a header with a view dropdown and Cols / Rows / Full / × \
+                     buttons — click these to arrange the workspace instead of using the \
+                     shortcuts. View → Layouts… offers one-click preset arrangements. The \
+                     ESP control panel docks on the right; toggle it with the ▸ ESP button \
+                     in the menu bar.",
+                );
+                ui.separator();
+                ui.label(egui::RichText::new("ESP devices").strong());
+                ui.label(
+                    "Connect multiple boards via + Add in the ESP panel. Click a port tab to \
+                     select the active device — plots and history follow that device (switching \
+                     clears the rolling history so streams don't mix). Use ✕ to disconnect the \
+                     selected session; its port reappears in + Add. Each device has its own \
+                     config, Start/Stop, and connection state.",
+                );
                 ui.separator();
                 ui.label(egui::RichText::new("Replay").strong());
                 ui.label(

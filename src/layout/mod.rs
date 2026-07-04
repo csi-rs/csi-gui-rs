@@ -8,5 +8,5 @@
 pub mod manager;
 pub mod node;
 
-pub use manager::TilingManager;
+pub use manager::{LayoutPreset, MAX_PANES, TilingManager};
 pub use node::{LayoutNode, SplitDirection, ViewType};

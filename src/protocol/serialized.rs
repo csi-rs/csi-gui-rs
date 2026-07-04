@@ -7,6 +7,7 @@
 //! HE chips (ESP32-C5 / C6). Both end with `csi_data: Vec<i8, 612>`.
 
 use crate::data::CsiData;
+use crate::protocol::info::ChipFamily;
 use serde::{Deserialize, Serialize};
 
 /// Mirror of `esp_csi_rs::time::DateTime` (all `u64`, varint-encoded by
@@ -28,7 +29,7 @@ pub struct DateTimeWire {
 /// on the wire (discriminant only; no fields). See the firmware's
 /// `RxCSIFmt` documentation for the secondary-channel × signal-mode ×
 /// bandwidth × STBC encoding behind each variant.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 #[allow(dead_code, missing_docs)]
 pub enum RxCsiFmtWire {
@@ -45,7 +46,13 @@ pub enum RxCsiFmtWire {
     SecaHtBw20Stbc = 10,
     SecaHtBw40 = 11,
     SecaHtBw40Stbc = 12,
-    Undefined = 13,
+    // C5/C6 (esp-csi-rs 0.8.0) added these HE/VHT formats; the
+    // discriminants must match `esp_csi_rs::csi::RxCSIFmt` exactly or
+    // postcard rejects the enum during decode and the packet is dropped.
+    VhtBw20 = 13,
+    He20Su = 14,
+    He20Mu = 15,
+    Undefined = 16,
 }
 
 /// Classic-chip `CSIDataPacket` mirror — field declaration order
@@ -179,17 +186,11 @@ pub struct CsiPacketHeC6 {
 }
 
 fn he_to_csidata(
-    mac: [u8; 6],
-    rssi: i32,
-    rate: u32,
-    noise_floor: i32,
-    channel: u32,
-    timestamp: u32,
-    sig_len: u32,
-    rx_state: u32,
+    header: ([u8; 6], i32, u32, i32, u32, u32, u32, u32),
     csi_data_len: u16,
     csi_data: Vec<i8>,
 ) -> CsiData {
+    let (mac, rssi, rate, noise_floor, channel, timestamp, sig_len, rx_state) = header;
     let csi_i32 = csi_data.iter().map(|v| *v as i32).collect();
     CsiData {
         mac: format_mac(&mac),
@@ -209,14 +210,16 @@ fn he_to_csidata(
 impl From<CsiPacketHeC5> for CsiData {
     fn from(w: CsiPacketHeC5) -> Self {
         he_to_csidata(
-            w.mac,
-            w.rssi,
-            w.rate,
-            w.noise_floor,
-            w.channel,
-            w.timestamp,
-            w.sig_len,
-            w.rx_state,
+            (
+                w.mac,
+                w.rssi,
+                w.rate,
+                w.noise_floor,
+                w.channel,
+                w.timestamp,
+                w.sig_len,
+                w.rx_state,
+            ),
             w.csi_data_len,
             w.csi_data,
         )
@@ -226,14 +229,16 @@ impl From<CsiPacketHeC5> for CsiData {
 impl From<CsiPacketHeC6> for CsiData {
     fn from(w: CsiPacketHeC6) -> Self {
         he_to_csidata(
-            w.mac,
-            w.rssi,
-            w.rate,
-            w.noise_floor,
-            w.channel,
-            w.timestamp,
-            w.sig_len,
-            w.rx_state,
+            (
+                w.mac,
+                w.rssi,
+                w.rate,
+                w.noise_floor,
+                w.channel,
+                w.timestamp,
+                w.sig_len,
+                w.rx_state,
+            ),
             w.csi_data_len,
             w.csi_data,
         )
@@ -247,147 +252,34 @@ fn format_mac(b: &[u8; 6]) -> String {
     )
 }
 
-/// COBS-framed postcard: one packet per `0x00`-terminated chunk.
-/// Tries the three known schemas (classic → C6 → C5) and returns the
-/// first match. Returns `None` on COBS / postcard decode failure so
-/// callers can bump the decode-failure counter.
+/// Decode one COBS-framed postcard CSI frame into [`CsiData`].
 ///
-/// The firmware ships each COBS byte through
-/// `esp_println::Printer::write_char(b as char)`
-/// (`esp-csi-rs/src/lib/logging/logging.rs:454`). That goes through the
-/// default `fmt::Write::write_char` which UTF-8-encodes the char, so
-/// every byte ≥ 0x80 leaves the device as a 2-byte sequence
-/// (`0xC2 X` for `0x80..=0xBF`, `0xC3 X` for `0xC0..=0xFF`). We invert
-/// that mapping (see `un_utf8` in this module) before handing the
-/// bytes to the COBS decoder.
-pub fn decode_cobs_packet(frame: &[u8]) -> Option<CsiData> {
-    let unmangled = un_utf8(frame);
-    let mut buf = vec![0u8; unmangled.len()];
-    let n = cobs_decode(&unmangled, &mut buf)?;
-    let body = &buf[..n];
-
-    if let Ok(p) = postcard::from_bytes::<CsiPacketClassic>(body) {
-        return Some(p.into());
-    }
-    if let Ok(p) = postcard::from_bytes::<CsiPacketHeC6>(body) {
-        return Some(p.into());
-    }
-    if let Ok(p) = postcard::from_bytes::<CsiPacketHeC5>(body) {
-        return Some(p.into());
-    }
-    None
-}
-
-/// Reverse the per-byte `write_char(b as char)` UTF-8 expansion the
-/// firmware applies. `0xC2 X` decodes back to `X`; `0xC3 X` decodes
-/// back to `X + 0x40`. Other bytes (0x00..=0x7F, except none should
-/// appear unpaired) pass through.
-///
-/// Truncated trailing lead byte is dropped silently — the next 0x00
-/// sentinel will discard the partial frame anyway.
-fn un_utf8(input: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        let b = input[i];
-        match b {
-            0xC2 if i + 1 < input.len() => {
-                out.push(input[i + 1]);
-                i += 2;
-            }
-            0xC3 if i + 1 < input.len() => {
-                out.push(input[i + 1].wrapping_add(0x40));
-                i += 2;
-            }
-            _ => {
-                out.push(b);
-                i += 1;
-            }
+/// `frame` is the buffer accumulated up to (not including) the `\0` COBS
+/// terminator. `postcard::take_from_bytes_cobs` decodes in place and
+/// tolerates trailing pad bytes after the encoded struct, mirroring
+/// csi-webserver-rs and the firmware's length-tolerant decode path.
+pub fn decode_cobs_packet(frame: &[u8], chip: ChipFamily) -> Option<CsiData> {
+    let mut owned = frame.to_vec();
+    let decoded = match chip {
+        ChipFamily::Esp32C5 => {
+            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketHeC5>(&mut owned).ok()?;
+            p.into()
         }
-    }
-    out
-}
-
-/// Minimal COBS decoder (no allocation beyond the caller's buffer).
-fn cobs_decode(src: &[u8], dst: &mut [u8]) -> Option<usize> {
-    let mut s = 0usize;
-    let mut d = 0usize;
-    while s < src.len() {
-        let code = src[s] as usize;
-        if code == 0 {
-            return None;
+        ChipFamily::Esp32C6 => {
+            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketHeC6>(&mut owned).ok()?;
+            p.into()
         }
-        s += 1;
-        for _ in 1..code {
-            if s >= src.len() {
-                return None;
-            }
-            if d >= dst.len() {
-                return None;
-            }
-            dst[d] = src[s];
-            d += 1;
-            s += 1;
+        _ => {
+            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketClassic>(&mut owned).ok()?;
+            p.into()
         }
-        if code < 0xFF && s < src.len() {
-            if d >= dst.len() {
-                return None;
-            }
-            dst[d] = 0;
-            d += 1;
-        }
-    }
-    Some(d)
+    };
+    Some(decoded)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Re-apply the firmware's `write_char(b as char)` UTF-8 expansion
-    /// so the test fixture matches what arrives on the wire.
-    fn utf8_mangle(input: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(input.len() * 2);
-        for &b in input {
-            if b < 0x80 {
-                out.push(b);
-            } else if b < 0xC0 {
-                out.push(0xC2);
-                out.push(b);
-            } else {
-                out.push(0xC3);
-                out.push(b - 0x40);
-            }
-        }
-        out
-    }
-
-    fn cobs_encode(input: &[u8]) -> Vec<u8> {
-        let mut out: Vec<u8> = Vec::with_capacity(input.len() + 2 + input.len() / 254);
-        let mut code_idx = out.len();
-        out.push(1);
-        let mut code: u8 = 1;
-        for &b in input {
-            if b == 0 {
-                out[code_idx] = code;
-                code_idx = out.len();
-                out.push(1);
-                code = 1;
-            } else {
-                out.push(b);
-                code += 1;
-                if code == 0xFF {
-                    out[code_idx] = code;
-                    code_idx = out.len();
-                    out.push(1);
-                    code = 1;
-                }
-            }
-        }
-        out[code_idx] = code;
-        out.push(0);
-        out
-    }
 
     #[test]
     fn decodes_classic_packet_no_datetime() {
@@ -418,14 +310,11 @@ mod tests {
             csi_data_len: 4,
             csi_data: vec![1, -2, 3, -4],
         };
-        let payload = postcard::to_allocvec(&packet).unwrap();
-        let frame = cobs_encode(&payload);
-        let frame_body = &frame[..frame.len() - 1];
-        // Apply the firmware's UTF-8 expansion so the test matches the
-        // wire reality (this is what the reader's cobs_accum collects).
-        let wire = utf8_mangle(frame_body);
+        let mut buf = vec![0u8; 1024];
+        let cobs = postcard::to_slice_cobs(&packet, &mut buf).unwrap();
+        let body = cobs.strip_suffix(&[0]).unwrap_or(cobs);
 
-        let pkt = decode_cobs_packet(&wire).expect("classic decode");
+        let pkt = decode_cobs_packet(body, ChipFamily::Esp32).expect("classic decode");
         assert_eq!(pkt.mac, "AA:BB:CC:DD:EE:FF");
         assert_eq!(pkt.rssi, -55);
         assert_eq!(pkt.channel, 6);
@@ -434,15 +323,6 @@ mod tests {
         assert_eq!(pkt.sig_len, 128);
         assert_eq!(pkt.csi_raw_data, vec![1, -2, 3, -4]);
         assert_eq!(pkt.data_length, 4);
-    }
-
-    #[test]
-    fn un_utf8_round_trips_all_bytes() {
-        // Every byte the firmware can output, after `write_char(b as char)`,
-        // must round-trip back through `un_utf8`.
-        let all: Vec<u8> = (0u8..=255u8).collect();
-        let mangled = utf8_mangle(&all);
-        assert_eq!(un_utf8(&mangled), all);
     }
 
     #[test]
@@ -482,13 +362,62 @@ mod tests {
             csi_data_len: 2,
             csi_data: vec![5, -6],
         };
-        let payload = postcard::to_allocvec(&packet).unwrap();
-        let frame = cobs_encode(&payload);
-        let frame_body = &frame[..frame.len() - 1];
-        let wire = utf8_mangle(frame_body);
-        let pkt = decode_cobs_packet(&wire).expect("classic w/ datetime");
+        let mut buf = vec![0u8; 1024];
+        let cobs = postcard::to_slice_cobs(&packet, &mut buf).unwrap();
+        let body = cobs.strip_suffix(&[0]).unwrap_or(cobs);
+        let pkt = decode_cobs_packet(body, ChipFamily::Esp32).expect("classic w/ datetime");
         assert_eq!(pkt.mac, "01:02:03:04:05:06");
         assert_eq!(pkt.timestamp, 999_999);
         assert_eq!(pkt.csi_raw_data, vec![5, -6]);
+    }
+
+    /// Locks in the `RxCsiFmtWire` fix: a C6 packet whose `data_format` is
+    /// one of the HE/VHT values added in esp-csi-rs 0.8.0 (`He20Su` = 14)
+    /// must postcard-roundtrip. Before the enum was extended, discriminant
+    /// 14 didn't exist and the packet would fail to decode.
+    #[test]
+    fn c6_he20su_data_format_round_trips() {
+        let packet = CsiPacketHeC6 {
+            mac: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+            rssi: -48,
+            timestamp: 55_555,
+            rate: 0,
+            noise_floor: -92,
+            sig_len: 200,
+            rx_state: 0,
+            dump_len: 64,
+            he_sigb_len: 0,
+            cur_single_mpdu: 1,
+            cur_bb_format: 3,
+            rx_channel_estimate_info_vld: 1,
+            rx_channel_estimate_len: 128,
+            second: 0,
+            channel: 149,
+            is_group: 0,
+            rxend_state: 0,
+            rxmatch3: 0,
+            rxmatch2: 0,
+            rxmatch1: 0,
+            rxmatch0: 0,
+            date_time: None,
+            sequence_number: 9,
+            csi_data_len: 3,
+            data_format: RxCsiFmtWire::He20Su,
+            csi_data: vec![7, -8, 9],
+        };
+        // Struct-level roundtrip proves the new discriminant (de)serializes.
+        let payload = postcard::to_allocvec(&packet).unwrap();
+        let decoded: CsiPacketHeC6 = postcard::from_bytes(&payload).unwrap();
+        assert_eq!(decoded.data_format, RxCsiFmtWire::He20Su);
+
+        // And through the full COBS wire path used by the reader.
+        let mut buf = vec![0u8; 1024];
+        let cobs = postcard::to_slice_cobs(&packet, &mut buf).unwrap();
+        let body = cobs.strip_suffix(&[0]).unwrap_or(cobs);
+        let pkt = decode_cobs_packet(body, ChipFamily::Esp32C6).expect("C6 HE20-SU decode");
+        assert_eq!(pkt.mac, "11:22:33:44:55:66");
+        assert_eq!(pkt.channel, 149);
+        assert_eq!(pkt.csi_raw_data, vec![7, -8, 9]);
+        assert_eq!(pkt.data_length, 3);
     }
 }

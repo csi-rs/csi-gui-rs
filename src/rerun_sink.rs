@@ -64,8 +64,10 @@ const ROLLING_HEATMAP_ROWS: usize = 500;
 
 /// Where the sink should send its data. `Off` is the default.
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub enum Transport {
     /// Sink is disabled — `log_packet` / `log_tick` are no-ops.
+    #[default]
     Off,
     /// Launch a local viewer (`rerun` CLI) and stream into it.
     Spawn,
@@ -84,11 +86,6 @@ pub enum Transport {
     },
 }
 
-impl Default for Transport {
-    fn default() -> Self {
-        Self::Off
-    }
-}
 
 impl Transport {
     /// Short human label for the status bar / menu (e.g. `"spawn"`,

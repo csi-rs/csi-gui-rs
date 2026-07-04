@@ -169,13 +169,13 @@ fn apply_interpolation(packets: &mut [CsiData], mode: Interpolation) {
             continue;
         }
         let mut new_amps = amps.clone();
-        for k in 0..n {
-            if new_amps[k] > 1e-6 {
+        for (k, slot) in new_amps.iter_mut().enumerate().take(n) {
+            if *slot > 1e-6 {
                 continue;
             }
             let lo = anchors.iter().rev().find(|&&a| a < k).copied();
             let hi = anchors.iter().find(|&&a| a > k).copied();
-            new_amps[k] = match (lo, hi, mode) {
+            *slot = match (lo, hi, mode) {
                 (Some(l), Some(h), Interpolation::Linear) => {
                     let t = (k - l) as f32 / (h - l) as f32;
                     amps[l] * (1.0 - t) + amps[h] * t
@@ -390,13 +390,13 @@ fn scale_vector(
 
 fn rescale_packet_amplitudes(p: &mut CsiData, new_amps: &[f32]) {
     let n = p.subcarriers().min(new_amps.len());
-    for k in 0..n {
+    for (k, &new_amp) in new_amps.iter().enumerate().take(n) {
         let old = p.amplitude(k);
         let base = 2 * k;
         if base + 1 >= p.csi_raw_data.len() {
             break;
         }
-        let new_amp = new_amps[k].max(0.0);
+        let new_amp = new_amp.max(0.0);
         if old < 1e-6 {
             // Lost phase — drop the new amplitude onto I.
             p.csi_raw_data[base] = new_amp.round() as i32;

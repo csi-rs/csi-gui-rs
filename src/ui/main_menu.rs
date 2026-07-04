@@ -13,34 +13,26 @@ pub enum MainMenuItem {
     ImportData,
     /// Open the post-capture preprocessing overlay.
     Preprocess,
-    /// Pulse DTR/RTS to reset the connected ESP and re-identify.
-    ResetEsp,
-    /// Open the device-config overlay (`set-*` knobs).
-    ConfigureEsp,
-    /// Toggle Start/Stop collection (label flips on `is_collecting`).
-    StartStop,
     /// Close the menu without taking any action.
     Close,
 }
 
 impl MainMenuItem {
     /// Items rendered in this order, top-to-bottom, by [`MainMenu::show`].
-    pub const ALL: [MainMenuItem; 10] = [
+    /// Device/ESP actions (reset, configure, start/stop) now live in the
+    /// right-hand ESP panel, not here.
+    pub const ALL: [MainMenuItem; 7] = [
         MainMenuItem::Theme,
         MainMenuItem::SaveTemplate,
         MainMenuItem::LoadTemplate,
         MainMenuItem::ExportData,
         MainMenuItem::ImportData,
         MainMenuItem::Preprocess,
-        MainMenuItem::ResetEsp,
-        MainMenuItem::ConfigureEsp,
-        MainMenuItem::StartStop,
         MainMenuItem::Close,
     ];
 
-    /// Human label for the row; the Start/Stop label flips on
-    /// `is_collecting`.
-    pub fn label(self, is_collecting: bool) -> &'static str {
+    /// Human label for the row.
+    pub fn label(self) -> &'static str {
         match self {
             MainMenuItem::Theme => "Theme…",
             MainMenuItem::SaveTemplate => "Save Template",
@@ -48,15 +40,6 @@ impl MainMenuItem {
             MainMenuItem::ExportData => "Export Data",
             MainMenuItem::ImportData => "Import Data (Replay)",
             MainMenuItem::Preprocess => "Preprocessing…",
-            MainMenuItem::ResetEsp => "Reset ESP",
-            MainMenuItem::ConfigureEsp => "Configure ESP",
-            MainMenuItem::StartStop => {
-                if is_collecting {
-                    "Stop Collection"
-                } else {
-                    "Start Collection"
-                }
-            }
             MainMenuItem::Close => "Close",
         }
     }
@@ -71,23 +54,15 @@ pub struct MainMenu {
 impl MainMenu {
     /// Render the main menu window.
     ///
-    /// `is_collecting` flips the Start/Stop label. `start_enabled` gates
-    /// the Start/Stop row when no esp-csi-cli-rs firmware is identified —
-    /// while collecting the row stays enabled (so the user can still
-    /// Stop), but Start is disabled offline. Keyboard `Enter` and the
-    /// arrow keys honour the same gate.
-    pub fn show(
-        &mut self,
-        ctx: &egui::Context,
-        is_collecting: bool,
-        start_enabled: bool,
-    ) -> Option<MainMenuItem> {
+    /// `is_collecting` gates the Import row — importing a capture would
+    /// clobber the live stream, so it stays locked while collection is
+    /// active. Keyboard `Enter` and the arrow keys honour the same gate.
+    pub fn show(&mut self, ctx: &egui::Context, is_collecting: bool) -> Option<MainMenuItem> {
         if !self.open {
             return None;
         }
         let mut chosen = None;
         let is_enabled = |item: MainMenuItem| match item {
-            MainMenuItem::StartStop => is_collecting || start_enabled,
             // Importing a capture would clobber the live stream — keep
             // it locked while collection is active.
             MainMenuItem::ImportData => !is_collecting,
@@ -100,7 +75,7 @@ impl MainMenu {
             .show(ctx, |ui| {
                 for (i, item) in MainMenuItem::ALL.iter().enumerate() {
                     let selected = i == self.selected;
-                    let label = item.label(is_collecting);
+                    let label = item.label();
                     let text = if selected {
                         egui::RichText::new(format!("▶ {label}")).strong()
                     } else {
@@ -109,12 +84,9 @@ impl MainMenu {
                     let enabled = is_enabled(*item);
                     let resp = ui.add_enabled(enabled, egui::Button::new(text));
                     let resp = match (item, enabled) {
-                        (MainMenuItem::StartStop, false) => resp.on_disabled_hover_text(
-                            "Connect an ESP32 running esp-csi-cli-rs firmware first.",
-                        ),
-                        (MainMenuItem::ImportData, false) => resp.on_disabled_hover_text(
-                            "Stop the live collection first.",
-                        ),
+                        (MainMenuItem::ImportData, false) => {
+                            resp.on_disabled_hover_text("Stop the live collection first.")
+                        }
                         _ => resp,
                     };
                     if resp.clicked() {

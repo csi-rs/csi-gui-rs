@@ -5,8 +5,9 @@
 //! pane layout and float on top of the central panel when open.
 
 pub mod alert;
-pub mod config_overlay;
+pub mod esp_panel;
 pub mod help;
+pub mod layout_picker;
 pub mod main_menu;
 pub mod preprocess_overlay;
 pub mod template_picker;

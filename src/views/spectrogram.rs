@@ -132,6 +132,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let x_offset = -(subcarriers as f64 / 2.0).floor();
 
     Plot::new("spectrogram_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .x_axis_label("Subcarrier (DC = 0)")
         .y_axis_label("packet step (older →)")
         .include_x(x_lo)

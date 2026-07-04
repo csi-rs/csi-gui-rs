@@ -16,7 +16,7 @@
 
 use crate::console::RawConsole;
 use crate::data::CsiData;
-use crate::protocol::command::{render_apply_config, render_start, EspCommand};
+use crate::protocol::command::{render_apply_config, render_restart, render_start, EspCommand};
 use crate::protocol::config::LogMode;
 use crate::protocol::info::{ChipFamily, DeviceInfo};
 use crate::protocol::parse::{parse_array_list, parse_esp_csi_tool, TextParser};
@@ -140,7 +140,8 @@ fn reader_main(
         device: None,
         chip: ChipFamily::Unknown,
         text: TextParser::default(),
-        cobs_accum: Vec::with_capacity(8192),
+        cobs_buf: Vec::with_capacity(8192),
+        drop_next_chunk: true,
         connection: ConnState::Disconnected,
         state_tx,
         info_tx,
@@ -241,7 +242,10 @@ struct Ctx {
     device: Option<DeviceInfo>,
     chip: ChipFamily,
     text: TextParser,
-    cobs_accum: Vec<u8>,
+    /// Reusable buffer for `read_until(b'\0')` in Serialized mode.
+    cobs_buf: Vec<u8>,
+    /// Skip the next null-delimited chunk after a command write (CLI echo).
+    drop_next_chunk: bool,
     connection: ConnState,
     state_tx: Sender<ConnState>,
     info_tx: Sender<DeviceInfo>,
@@ -264,42 +268,25 @@ impl Ctx {
             EspCommand::OpenPort(p) => {
                 self.port_name = Some(p);
                 self.port = None;
+                self.shared.config_applied.store(false, Ordering::Release);
             }
             EspCommand::Reset => {
                 self.shared.should_reset.store(true, Ordering::Release);
             }
-            EspCommand::Start { duration_sec } => {
-                // Reset parser/counter state BEFORE sending `start`. The
-                // previous Stop may have left bytes in the serial input
-                // and cobs_accum / TextParser may carry partial framing.
-                // Without this, the first session after a restart loses
-                // packets (or all of them, if the firmware never emits a
-                // 0x00 sentinel before a new full COBS frame arrives).
+            EspCommand::Start { duration_sec, log_mode } => {
                 self.shared.reset_counters();
-                self.drain_echo();
                 self.text.reset();
-                self.cobs_accum.clear();
+                self.cobs_buf.clear();
+                self.sync_log_mode(log_mode);
                 self.send_line(&render_start(duration_sec));
                 self.shared.is_collecting.store(true, Ordering::Release);
                 self.shared.bump_io_generation();
-                // Give the firmware a moment to echo the command + emit
-                // any header lines, then drain them so they don't get
-                // interpreted as the first CSI packet.
-                std::thread::sleep(Duration::from_millis(20));
-                self.drain_echo();
-                self.text.reset();
-                self.cobs_accum.clear();
             }
             EspCommand::Stop => {
                 self.send_byte(b'q');
                 self.shared.is_collecting.store(false, Ordering::Release);
-                // Drain the trailing CSI packet + any post-stop firmware
-                // output ("DONE-COLLECTION", CLI prompt, etc.) so a
-                // subsequent Start sees an empty pipe.
-                std::thread::sleep(Duration::from_millis(50));
-                self.drain_echo();
                 self.text.reset();
-                self.cobs_accum.clear();
+                self.cobs_buf.clear();
                 self.shared.reset_counters();
                 self.shared.bump_io_generation();
             }
@@ -309,22 +296,18 @@ impl Ctx {
                     return;
                 }
                 let cmds = render_apply_config(&cfg, chip);
-                for (i, line) in cmds.iter().enumerate() {
+                for line in &cmds {
                     self.send_line(line);
-                    let is_log_mode = line.starts_with("set-log-mode");
-                    let pause = if is_log_mode { 50 } else { 20 };
-                    std::thread::sleep(Duration::from_millis(pause));
-                    self.drain_echo();
-                    if is_log_mode {
+                    if line.starts_with("set-log-mode") {
                         self.shared
                             .log_mode_id
                             .store(cfg.log_mode.id(), Ordering::Release);
                         self.shared.bump_io_generation();
                         self.text.reset();
-                        self.cobs_accum.clear();
+                        self.cobs_buf.clear();
                     }
-                    let _ = i;
                 }
+                self.shared.config_applied.store(true, Ordering::Release);
             }
             EspCommand::Raw(s) => {
                 // Firmware CLI is locked while collecting (only `q` /
@@ -338,6 +321,16 @@ impl Ctx {
                 } else {
                     self.send_line(&s);
                 }
+            }
+            EspCommand::Restart => {
+                if self.shared.is_collecting.load(Ordering::Acquire) {
+                    self.send_byte(b'q');
+                    self.shared.is_collecting.store(false, Ordering::Release);
+                }
+                self.send_line(&render_restart());
+                // The device reboots and re-emits its banner; re-run the
+                // reset/identify handshake so the GUI re-syncs cleanly.
+                self.shared.should_reset.store(true, Ordering::Release);
             }
             EspCommand::Shutdown => {}
         }
@@ -366,7 +359,9 @@ impl Ctx {
 
     fn reset_and_identify(&mut self) {
         self.text.reset();
-        self.cobs_accum.clear();
+        self.cobs_buf.clear();
+        self.drop_next_chunk = true;
+        self.shared.config_applied.store(false, Ordering::Release);
         if let Some(reader) = self.port.as_mut() {
             let port = reader.get_mut();
             // Hard-reset-to-firmware: RTS=True alone pulls EN low (assert reset),
@@ -443,9 +438,7 @@ impl Ctx {
     fn fetch_info(&mut self) -> Option<DeviceInfo> {
         self.send_line("info");
         let console = self.console.clone();
-        let Some(reader) = self.port.as_mut() else {
-            return None;
-        };
+        let reader = self.port.as_mut()?;
         let mut acc = String::new();
         let deadline = Instant::now() + Duration::from_millis(2_000);
         let mut line = String::new();
@@ -469,25 +462,15 @@ impl Ctx {
         None
     }
 
-    fn drain_echo(&mut self) {
-        let Some(reader) = self.port.as_mut() else { return; };
-        // Consume whatever is buffered inside the BufReader first — these
-        // bytes have already been read off the port and `port.read()`
-        // would not see them.
-        let buffered = reader.buffer().len();
-        if buffered > 0 {
-            reader.consume(buffered);
-        }
-        let port = reader.get_mut();
-        let mut tmp = [0u8; 256];
-        let _ = port.set_timeout(Duration::from_millis(10));
-        loop {
-            match port.read(&mut tmp) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => continue,
-            }
-        }
-        let _ = port.set_timeout(Duration::from_millis(100));
+    /// Push `set-log-mode` to the device and align the reader parser.
+    fn sync_log_mode(&mut self, log_mode: LogMode) {
+        self.send_line(&format!("set-log-mode --mode={}", log_mode.cli()));
+        self.shared
+            .log_mode_id
+            .store(log_mode.id(), Ordering::Release);
+        self.shared.bump_io_generation();
+        self.text.reset();
+        self.cobs_buf.clear();
     }
 
     fn send_line(&mut self, line: &str) {
@@ -497,21 +480,22 @@ impl Ctx {
         let mut buf = line.as_bytes().to_vec();
         buf.extend_from_slice(b"\r\n");
         let _ = port.write_all(&buf);
-        let _ = port.flush();
+        self.drop_next_chunk = true;
     }
 
     fn send_byte(&mut self, b: u8) {
         let Some(reader) = self.port.as_mut() else { return; };
         let port = reader.get_mut();
         let _ = port.write_all(&[b]);
-        let _ = port.flush();
+        self.drop_next_chunk = true;
     }
 
     fn handle_disconnect(&mut self) {
         self.port = None;
         self.device = None;
         self.text.reset();
-        self.cobs_accum.clear();
+        self.cobs_buf.clear();
+        self.drop_next_chunk = true;
         self.shared.is_collecting.store(false, Ordering::Release);
         self.set_state(ConnState::Disconnected);
     }
@@ -532,30 +516,45 @@ impl Ctx {
 
         match mode {
             LogMode::Serialized => {
-                let mut byte = [0u8; 1];
-                match reader.read_exact(&mut byte) {
-                    Ok(()) => {}
-                    Err(e) => return classify_read_err(&e),
-                }
-                if byte[0] == 0 {
-                    let pkt = if let Some(p) = decode_cobs_packet(&self.cobs_accum) {
-                        p
-                    } else {
-                        self.shared
-                            .frames_decode_failed
-                            .fetch_add(1, Ordering::Relaxed);
-                        CsiData::default()
-                    };
-                    self.shared.frames_total.fetch_add(1, Ordering::Relaxed);
-                    let _ = try_push(&self.pkt_tx, pkt);
-                    self.cobs_accum.clear();
-                    ReadOutcome::Frame
-                } else {
-                    self.cobs_accum.push(byte[0]);
-                    if self.cobs_accum.len() > 16 * 1024 {
-                        self.cobs_accum.clear();
+                self.cobs_buf.clear();
+                match reader.read_until(b'\0', &mut self.cobs_buf) {
+                    Ok(0) => ReadOutcome::Idle,
+                    Ok(_) => {
+                        if self.drop_next_chunk {
+                            self.drop_next_chunk = false;
+                            return ReadOutcome::Frame;
+                        }
+                        if self.cobs_buf.last() == Some(&0) {
+                            self.cobs_buf.pop();
+                        }
+                        if self.cobs_buf.is_empty() {
+                            return ReadOutcome::Frame;
+                        }
+                        if self.shared.is_collecting.load(Ordering::Relaxed) {
+                            self.shared.frames_total.fetch_add(1, Ordering::Relaxed);
+                            let chip = self.chip;
+                            let pkt = if let Some(p) =
+                                decode_cobs_packet(&self.cobs_buf, chip)
+                            {
+                                if p.is_decoded() {
+                                    p
+                                } else {
+                                    self.shared
+                                        .frames_decode_failed
+                                        .fetch_add(1, Ordering::Relaxed);
+                                    CsiData::default()
+                                }
+                            } else {
+                                self.shared
+                                    .frames_decode_failed
+                                    .fetch_add(1, Ordering::Relaxed);
+                                CsiData::default()
+                            };
+                            let _ = try_push(&self.pkt_tx, pkt);
+                        }
+                        ReadOutcome::Frame
                     }
-                    ReadOutcome::Frame
+                    Err(e) => classify_read_err(&e),
                 }
             }
             LogMode::Text => {

@@ -108,6 +108,8 @@ pub struct ViewCtx<'a> {
     pub view_state: &'a mut ViewState,
     /// `true` when this pane has keyboard/input focus.
     pub focused: bool,
+    /// Vertical space left for view content below the pane header (px).
+    pub plot_budget: f32,
 }
 
 impl ViewCtx<'_> {
@@ -116,6 +118,11 @@ impl ViewCtx<'_> {
     pub fn view_anchor(&self) -> Option<u64> {
         self.replay.anchor
     }
+}
+
+/// Plot height for the current pane body (toolbar rows sit above the plot).
+pub fn plot_height(budget: f32) -> f32 {
+    (budget - 72.0).max(80.0)
 }
 
 /// Map an array position `k ∈ 0..n` to its physical subcarrier index

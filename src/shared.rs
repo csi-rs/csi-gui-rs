@@ -33,6 +33,10 @@ pub struct EspSharedState {
     /// Internal tag identifying which [`crate::protocol::config::LogMode`]
     /// parser the reader should run. Updated when `set-log-mode` is sent.
     pub log_mode_id: AtomicU8,
+    /// `true` after the reader finishes an [`crate::protocol::command::EspCommand::ApplyConfig`]
+    /// pass. Cleared on reconnect / reset and when the user edits config in
+    /// the ESP panel until the next Save & Apply.
+    pub config_applied: AtomicBool,
     /// Monotonic counter bumped whenever the I/O pipeline is re-armed
     /// (log mode change, start/stop). Lets views invalidate stale state.
     pub io_generation: AtomicU64,
@@ -66,7 +70,9 @@ impl EspSharedState {
             is_collecting: AtomicBool::new(false),
             should_reset: AtomicBool::new(false),
             should_start: AtomicBool::new(false),
-            log_mode_id: AtomicU8::new(0), // default Serialized (matches EspConfig::default)
+            // Firmware boots in ArrayList; updated when `set-log-mode` is applied.
+            log_mode_id: AtomicU8::new(2),
+            config_applied: AtomicBool::new(false),
             io_generation: AtomicU64::new(0),
             frames_total: AtomicU64::new(0),
             frames_decode_failed: AtomicU64::new(0),
@@ -97,6 +103,16 @@ impl EspSharedState {
     /// session transitions.
     pub fn bump_io_generation(&self) -> u64 {
         self.io_generation.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// Mark session config as edited but not yet pushed to the device.
+    pub fn mark_config_dirty(&self) {
+        self.config_applied.store(false, Ordering::Release);
+    }
+
+    /// `true` when the reader has finished applying the current config.
+    pub fn is_config_applied(&self) -> bool {
+        self.config_applied.load(Ordering::Acquire)
     }
 
     /// Fraction of frames that decoded successfully, in `[0.0, 1.0]`.

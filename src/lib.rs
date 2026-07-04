@@ -117,8 +117,8 @@
 //! - [`console`] — rolling raw-UART text buffer used by the Console view.
 //! - [`shared`] — lock-free state shared between the reader thread and the
 //!   UI thread.
-//! - [`ui`] — modal overlays (config, help, view selector, theme
-//!   picker, preprocessing, …).
+//! - [`ui`] — modal overlays (help, view/layout pickers, theme picker,
+//!   preprocessing, …) and the docked ESP device panel.
 //! - [`theme`] — color schemes.
 
 pub mod app;

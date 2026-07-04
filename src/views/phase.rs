@@ -141,11 +141,12 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let (x_lo, x_hi) = subcarrier_x_bounds(subcarriers);
 
     if matches!(display, PhaseDisplay::Heatmap) {
-        render_heatmap(ui, &traces, subcarriers, mode, x_lo, x_hi);
+        render_heatmap(ui, &traces, subcarriers, mode, x_lo, x_hi, ctx.plot_budget);
         return;
     }
 
     let mut plot = Plot::new("phase_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .legend(Legend::default())
         .x_axis_label("Subcarrier (DC = 0, − below, + above)")
         .y_axis_label(match mode {
@@ -231,6 +232,7 @@ fn render_heatmap(
     mode: PhaseMode,
     x_lo: f64,
     x_hi: f64,
+    plot_budget: f32,
 ) {
     let rows = traces.len();
     let mut vmin = f32::INFINITY;
@@ -260,6 +262,7 @@ fn render_heatmap(
     let span_seq = (vmax - vmin).max(1e-6);
 
     Plot::new("phase_heatmap")
+        .height(super::plot_height(plot_budget))
         .x_axis_label("Subcarrier (DC = 0)")
         .y_axis_label("packet step (older →)")
         .include_x(x_lo)

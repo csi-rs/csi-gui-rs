@@ -32,6 +32,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
 
     let n = cirs.len();
     Plot::new("cir_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .legend(Legend::default())
         .x_axis_label("Delay tap")
         .y_axis_label("|h|")

@@ -124,11 +124,12 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let (x_lo, x_hi) = subcarrier_x_bounds(subcarriers);
 
     if matches!(display, MagnitudeDisplay::Heatmap) {
-        render_heatmap(ui, &traces, subcarriers, scale, x_lo, x_hi);
+        render_heatmap(ui, &traces, subcarriers, scale, x_lo, x_hi, ctx.plot_budget);
         return;
     }
 
     Plot::new("magnitude_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .legend(Legend::default())
         .x_axis_label("Subcarrier (DC = 0, − below, + above)")
         .y_axis_label(y_label)
@@ -199,6 +200,7 @@ fn render_heatmap(
     scale: MagnitudeScale,
     x_lo: f64,
     x_hi: f64,
+    plot_budget: f32,
 ) {
     // Trace ordering: oldest at index 0, newest last. Render the newest
     // row at the bottom so the heatmap reads top-to-bottom = old-to-new,
@@ -224,6 +226,7 @@ fn render_heatmap(
     let x_offset = -(subcarriers as f64 / 2.0).floor();
 
     Plot::new("magnitude_heatmap")
+        .height(super::plot_height(plot_budget))
         .x_axis_label("Subcarrier (DC = 0)")
         .y_axis_label("packet step (older →)")
         .include_x(x_lo)

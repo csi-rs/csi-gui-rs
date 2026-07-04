@@ -26,6 +26,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let max_amp = (0..n).map(|i| csi.amplitude(i)).fold(1.0f32, f32::max);
 
     Plot::new("polar_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .data_aspect(1.0)
         .x_axis_label("I")
         .y_axis_label("Q")

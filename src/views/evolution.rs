@@ -107,6 +107,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     // of the stream until the user keeps scrolling — exactly the
     // "screen stopped following packets" symptom.
     Plot::new("evolution_plot")
+        .height(super::plot_height(ctx.plot_budget))
         .legend(Legend::default())
         .x_axis_label("packet step")
         .y_axis_label(metric.y_label())
