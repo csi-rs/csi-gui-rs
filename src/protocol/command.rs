@@ -64,6 +64,10 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         ));
     }
     out.push(format!("set-wifi --ap-dhcp={}", on_off(cfg.ap_dhcp)));
+    // `peer-mac` / `ht40` are ESP-NOW-only knobs. Emit them only for the
+    // ESP-NOW modes so other modes don't get spurious set-wifi lines. An
+    // empty `peer-mac` is sent verbatim to clear any prior filter back to
+    // automatic pairing.
     if matches!(
         cfg.wifi_mode,
         WifiMode::EspNowCentral
