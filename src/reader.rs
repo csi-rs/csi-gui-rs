@@ -182,21 +182,23 @@ fn reader_main(
             state.shared.is_collecting.store(true, Ordering::Release);
         }
 
-        // 5) Drain serial frames.
+        // 5) Drain serial frames only after identification succeeds.
         let mut produced = 0usize;
         let mut io_err = false;
-        for _ in 0..READER_BATCH {
-            match state.read_one_frame() {
-                ReadOutcome::Frame => {
-                    produced += 1;
-                    if produced >= YIELD_EVERY {
+        if state.connection == ConnState::Streaming {
+            for _ in 0..READER_BATCH {
+                match state.read_one_frame() {
+                    ReadOutcome::Frame => {
+                        produced += 1;
+                        if produced >= YIELD_EVERY {
+                            break;
+                        }
+                    }
+                    ReadOutcome::Idle => break,
+                    ReadOutcome::IoError => {
+                        io_err = true;
                         break;
                     }
-                }
-                ReadOutcome::Idle => break,
-                ReadOutcome::IoError => {
-                    io_err = true;
-                    break;
                 }
             }
         }
@@ -380,6 +382,7 @@ impl Ctx {
                 if info.protocol_supported() {
                     let _ = self.info_tx.send(info.clone());
                     self.device = Some(info);
+                    self.drop_next_chunk = false;
                     self.set_state(ConnState::Streaming);
                 } else {
                     self.set_state(ConnState::UnsupportedProtocol(info.protocol));
@@ -436,11 +439,14 @@ impl Ctx {
     }
 
     fn fetch_info(&mut self) -> Option<DeviceInfo> {
-        self.send_line("info");
+        // Identification uses line mode — do not arm the serialized
+        // drop-next-chunk flag and ensure the command leaves the host UART.
+        self.drop_next_chunk = false;
+        self.send_line_inner("info", false);
         let console = self.console.clone();
         let reader = self.port.as_mut()?;
         let mut acc = String::new();
-        let deadline = Instant::now() + Duration::from_millis(2_000);
+        let deadline = Instant::now() + Duration::from_millis(3_000);
         let mut line = String::new();
         while Instant::now() < deadline {
             line.clear();
@@ -474,19 +480,30 @@ impl Ctx {
     }
 
     fn send_line(&mut self, line: &str) {
+        self.send_line_inner(line, true);
+    }
+
+    /// Write a CLI line to the port. When `mark_drop` is true, the next
+    /// null-delimited serialized chunk is discarded (CLI echo). Identification
+    /// commands pass `false`.
+    fn send_line_inner(&mut self, line: &str, mark_drop: bool) {
         self.console.push(format!("» {line}"));
         let Some(reader) = self.port.as_mut() else { return; };
         let port = reader.get_mut();
         let mut buf = line.as_bytes().to_vec();
         buf.extend_from_slice(b"\r\n");
         let _ = port.write_all(&buf);
-        self.drop_next_chunk = true;
+        let _ = port.flush();
+        if mark_drop {
+            self.drop_next_chunk = true;
+        }
     }
 
     fn send_byte(&mut self, b: u8) {
         let Some(reader) = self.port.as_mut() else { return; };
         let port = reader.get_mut();
         let _ = port.write_all(&[b]);
+        let _ = port.flush();
         self.drop_next_chunk = true;
     }
 

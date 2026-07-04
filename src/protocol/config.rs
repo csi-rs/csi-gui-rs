@@ -120,9 +120,10 @@ impl WifiProtocol {
 
 /// Forced ESP-NOW HT40 transmit secondary channel (`set-wifi --ht40=…`).
 /// `None` reverts to HT20/legacy per rate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Ht40 {
     /// HT20 / legacy (the `none` token).
+    #[default]
     None,
     /// Secondary channel above the primary.
     Above,
@@ -253,8 +254,10 @@ pub enum CsiDelivery {
     Callback,
     /// Async over a bounded channel + dedicated drain task.
     Async,
-    /// Zero-copy fast-path — applies on next `start`; no CSI data is
-    /// delivered to the host (throughput benchmark only).
+    /// Zero-copy fast-path. Stored as a device flag and applied on the
+    /// **next `start`**; while active no CSI data is delivered or logged
+    /// and the `q`-key stop peek is skipped (the run is duration-bound or
+    /// reset-driven). Host views receive nothing in this mode.
     Raw,
 }
 
@@ -390,9 +393,13 @@ pub struct EspConfig {
     pub ap_password: String,
     /// Serve DHCP in AP mode (`set-wifi --ap-dhcp=on|off`).
     pub ap_dhcp: bool,
-    /// ESP-NOW explicit peer MAC (`set-wifi --peer-mac=…`). Empty = auto.
+    /// ESP-NOW peer source MAC filter (`set-wifi --peer-mac=…`). Empty means
+    /// automatic magic-prefix pairing (`auto`). ESP-NOW modes only.
+    #[serde(default)]
     pub peer_mac: String,
-    /// ESP-NOW forced HT40 TX PHY (`set-wifi --ht40=…`).
+    /// Forced ESP-NOW TX HT40 secondary channel (`set-wifi --ht40=…`).
+    /// ESP-NOW modes only.
+    #[serde(default)]
     pub ht40: Ht40,
     /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
     pub traffic_hz: u64,
@@ -532,8 +539,34 @@ impl EspConfig {
         if !valid_channel(self.channel) {
             return Err(format!("invalid channel {}", self.channel));
         }
+        if !valid_peer_mac(&self.peer_mac) {
+            return Err(format!(
+                "invalid peer MAC '{}' (use aa:bb:cc:dd:ee:ff)",
+                self.peer_mac
+            ));
+        }
         Ok(())
     }
+}
+
+/// `true` when `mac` is empty (meaning automatic pairing) or six hex octets
+/// separated by `:` or `-`, mirroring the firmware's `--peer-mac` parser.
+pub fn valid_peer_mac(mac: &str) -> bool {
+    if mac.is_empty() {
+        return true;
+    }
+    let sep = if mac.contains(':') {
+        ':'
+    } else if mac.contains('-') {
+        '-'
+    } else {
+        return false;
+    };
+    let octets: Vec<&str> = mac.split(sep).collect();
+    octets.len() == 6
+        && octets
+            .iter()
+            .all(|o| o.len() == 2 && o.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// `true` when `c` is a 2.4 GHz (1..=14) or 5 GHz (UNII-1/2A/3) channel

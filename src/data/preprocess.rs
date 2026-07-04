@@ -169,7 +169,7 @@ fn apply_interpolation(packets: &mut [CsiData], mode: Interpolation) {
             continue;
         }
         let mut new_amps = amps.clone();
-        for (k, slot) in new_amps.iter_mut().enumerate().take(n) {
+        for (k, slot) in new_amps.iter_mut().enumerate() {
             if *slot > 1e-6 {
                 continue;
             }
@@ -390,13 +390,13 @@ fn scale_vector(
 
 fn rescale_packet_amplitudes(p: &mut CsiData, new_amps: &[f32]) {
     let n = p.subcarriers().min(new_amps.len());
-    for (k, &new_amp) in new_amps.iter().enumerate().take(n) {
+    for (k, &target) in new_amps.iter().enumerate().take(n) {
         let old = p.amplitude(k);
         let base = 2 * k;
         if base + 1 >= p.csi_raw_data.len() {
             break;
         }
-        let new_amp = new_amp.max(0.0);
+        let new_amp = target.max(0.0);
         if old < 1e-6 {
             // Lost phase — drop the new amplitude onto I.
             p.csi_raw_data[base] = new_amp.round() as i32;
@@ -419,10 +419,11 @@ mod tests {
             iq.push(*i);
             iq.push(*q);
         }
-        let mut p = CsiData::default();
-        p.data_length = iq.len() as u32;
-        p.csi_raw_data = iq;
-        p
+        CsiData {
+            data_length: iq.len() as u32,
+            csi_raw_data: iq,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -437,8 +438,10 @@ mod tests {
 
     #[test]
     fn linear_interpolation_fills_zero_subcarrier() {
-        let mut cfg = PreprocessConfig::default();
-        cfg.interpolation = Interpolation::Linear;
+        let cfg = PreprocessConfig {
+            interpolation: Interpolation::Linear,
+            ..Default::default()
+        };
         // Subcarrier 1 is zero; interpolation should fill it between
         // the amplitudes of subcarriers 0 and 2.
         let p = make_packet(&[(10, 0), (0, 0), (30, 0)]);
@@ -449,8 +452,10 @@ mod tests {
 
     #[test]
     fn nearest_neighbor_picks_closest_anchor() {
-        let mut cfg = PreprocessConfig::default();
-        cfg.interpolation = Interpolation::NearestNeighbor;
+        let cfg = PreprocessConfig {
+            interpolation: Interpolation::NearestNeighbor,
+            ..Default::default()
+        };
         // Anchors at indices 0 and 3. Subcarrier 2 is distance 2 from
         // the lower anchor and distance 1 from the upper one, so NN
         // should pick the upper amplitude (40).
@@ -465,11 +470,13 @@ mod tests {
 
     #[test]
     fn pipeline_preserves_cardinality() {
-        let mut cfg = PreprocessConfig::default();
-        cfg.interpolation = Interpolation::Linear;
-        cfg.feature_scaling = FeatureScaling::MaxMinNormalization;
+        let cfg = PreprocessConfig {
+            interpolation: Interpolation::Linear,
+            feature_scaling: FeatureScaling::MaxMinNormalization,
+            ..Default::default()
+        };
         let pkts: Vec<CsiData> = (0..8)
-            .map(|i| make_packet(&[(i as i32, 0), (i as i32, 0)]))
+            .map(|i: i32| make_packet(&[(i, 0), (i, 0)]))
             .collect();
         let out = cfg.apply(&pkts);
         assert_eq!(
@@ -481,8 +488,10 @@ mod tests {
 
     #[test]
     fn max_min_normalisation_brings_amps_into_range() {
-        let mut cfg = PreprocessConfig::default();
-        cfg.feature_scaling = FeatureScaling::MaxMinNormalization;
+        let mut cfg = PreprocessConfig {
+            feature_scaling: FeatureScaling::MaxMinNormalization,
+            ..Default::default()
+        };
         cfg.params.scaling_per_packet = true;
         let p = make_packet(&[(10, 0), (50, 0), (90, 0)]);
         let out = cfg.apply(&[p]);

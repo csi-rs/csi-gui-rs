@@ -320,15 +320,17 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
 
     let mut c = CsiData {
         csi_raw_data: csi,
-        rssi: g_i(1) as i32,
-        rate: g_u(2) as u32,
-        noise_floor: g_i(3) as i32,
-        channel: g_u(4) as u32,
-        timestamp: g_u(5),
-        sig_len: g_u(6) as u32,
-        rx_state: g_u(7) as u32,
         ..Default::default()
     };
+
+    // Fields 0..=7 are common across all chips.
+    c.rssi = g_i(1) as i32;
+    c.rate = g_u(2) as u32;
+    c.noise_floor = g_i(3) as i32;
+    c.channel = g_u(4) as u32;
+    c.timestamp = g_u(5);
+    c.sig_len = g_u(6) as u32;
+    c.rx_state = g_u(7) as u32;
 
     match layout {
         ArrayLayout::Classic => {
