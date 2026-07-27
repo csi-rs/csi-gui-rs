@@ -56,7 +56,9 @@
 
 ### Changed
 
-- **Enum fields use dropdowns** — Multi-value settings are now `ComboBox` widgets instead of click-to-cycle buttons (Wi-Fi mode, protocol, HT40, collection mode, log mode, PHY rate, CSI delivery, CSI preset).
+- **Enum fields use dropdowns** — Multi-value settings are now `ComboBox` widgets instead of click-to-cycle buttons (Wi-Fi mode, protocol, HT40, collection mode, log mode, PHY rate, CSI delivery).
+- **HE20 is a one-button preset** — The *HE: CSI preset* row is now a single **Apply HE20 preset** button (mirroring `csi-webserver-rs`) instead of a Default/He20 ComboBox. One click sets the full HE-LTF-only layout (`EspConfig::apply_he20_preset`) and collapses the pushed config to `set-csi --preset=he20`; clicking again clears back to the default preset.
+- **Channel hidden in Station mode** — The Channel field is hidden and `set-wifi --set-channel` is omitted when Wi-Fi mode is Station, since the channel follows the associated AP.
 
 ## Internal
 
@@ -66,7 +68,7 @@
 
 ## Verification
 
-- `cargo test` (35 unit tests)
+- `cargo test` (38 unit tests)
 - `cargo clippy -- -D warnings`
 - Manual:
   - Connect → Apply (Serialized) → Start — decode % rises quickly; firmware identifies reliably.
