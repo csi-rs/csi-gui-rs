@@ -1,13 +1,13 @@
 use crate::protocol::config::{
-    CollectionMode, CsiDelivery, CsiPreset, EspConfig, Ht40, LogMode, PhyRate, WifiMode,
-    WifiProtocol, ESP_CONFIG_FIELDS, valid_channel,
+    CsiDelivery, EspConfig, Ht40, LogMode, PhyRate, WifiMode, WifiProtocol, ESP_CONFIG_FIELDS,
+    valid_channel,
 };
+use crate::protocol::profile::active_profile;
 use crate::shared::EspSharedState;
 
 /// Persistent edit buffers for numeric ESP config fields (see `channel_text`).
 pub struct ConfigFieldBuffers {
     pub traffic_hz: String,
-    pub he_stbc: String,
     pub he_val_scale_cfg: String,
     pub start_duration: String,
 }
@@ -16,7 +16,6 @@ impl ConfigFieldBuffers {
     pub fn from_cfg(cfg: &EspConfig) -> Self {
         Self {
             traffic_hz: cfg.traffic_hz.to_string(),
-            he_stbc: cfg.he_stbc.to_string(),
             he_val_scale_cfg: cfg.he_val_scale_cfg.to_string(),
             start_duration: cfg
                 .start_duration_sec
@@ -41,9 +40,9 @@ impl Default for EspPanel {
 /// Render the scrollable grid of the `set-*` config knobs for one device's
 /// `cfg` into the given `ui`.
 ///
-/// Mode-specific fields (STA / AP credentials, ESP-NOW peer/HT40) are greyed
-/// out when the selected [`WifiMode`] doesn't use them, so the panel only
-/// invites edits that will actually take effect. `channel_buf` and
+/// Mode-specific fields (STA / AP credentials, emitter destination MAC, AP
+/// HT40) are greyed out when the selected [`WifiMode`] doesn't use them, so the
+/// panel only invites edits that will actually take effect. `channel_buf` and
 /// `field_bufs` are the session's persistent edit buffers.
 pub fn config_grid(
     ui: &mut egui::Ui,
@@ -89,33 +88,31 @@ pub fn commit_and_validate(
 /// Whether the config row at `idx` is shown at all for the current
 /// [`WifiMode`]. The channel is assigned by the associated AP in Station
 /// mode, so its row is hidden there (and omitted from the pushed config).
+/// The preset row is hidden unless the installed profile offers presets.
 /// Indices must track `ESP_CONFIG_FIELDS`.
 fn field_visible(idx: usize, mode: WifiMode) -> bool {
     match idx {
         // Channel
         2 => mode != WifiMode::Station,
+        // CSI preset
+        28 => !active_profile().preset_names().is_empty(),
         _ => true,
     }
 }
 
 /// Whether the config row at `idx` (index into `ESP_CONFIG_FIELDS`) applies
-/// to the current [`WifiMode`]. Credentials / peer settings that the mode
-/// doesn't use are greyed out. Indices must track `ESP_CONFIG_FIELDS`.
+/// to the current [`WifiMode`]. Credentials / destination settings that the
+/// mode doesn't use are greyed out. Indices must track `ESP_CONFIG_FIELDS`.
 fn field_enabled(idx: usize, mode: WifiMode) -> bool {
-    let is_esp_now = matches!(
-        mode,
-        WifiMode::EspNowCentral
-            | WifiMode::EspNowPeripheral
-            | WifiMode::EspNowFastCollector
-            | WifiMode::EspNowFastSource
-    );
     match idx {
         // STA SSID / STA Password
         3 | 4 => mode == WifiMode::Station,
         // AP SSID / AP Password / AP DHCP
         5..=7 => mode == WifiMode::WifiAp,
-        // Peer MAC / HT40 (ESP-NOW only)
-        8 | 9 => is_esp_now,
+        // Dest MAC — emitters inject; collectors have nothing to address.
+        8 => mode.is_emitter(),
+        // HT40 secondary channel — softAP only.
+        9 => mode == WifiMode::WifiAp,
         _ => true,
     }
 }
@@ -129,11 +126,6 @@ fn commit_channel(cfg: &mut EspConfig, buf: &str) {
 fn commit_numeric_fields(cfg: &mut EspConfig, bufs: &ConfigFieldBuffers) {
     if let Ok(v) = bufs.traffic_hz.trim().parse::<u64>() {
         cfg.traffic_hz = v;
-    }
-    if let Ok(v) = bufs.he_stbc.trim().parse::<u32>() {
-        if v <= 2 {
-            cfg.he_stbc = v;
-        }
     }
     if let Ok(v) = bufs.he_val_scale_cfg.trim().parse::<u32>() {
         if v <= 3 {
@@ -230,7 +222,7 @@ fn render_value(
             if ui
                 .add(
                     egui::TextEdit::singleline(&mut s)
-                        .hint_text("aa:bb:cc:dd:ee:ff (blank = auto)")
+                        .hint_text("aa:bb:cc:dd:ee:ff (blank = broadcast)")
                         .desired_width(180.0),
                 )
                 .changed()
@@ -263,15 +255,7 @@ fn render_value(
             }
         }
         11 => toggle(ui, &mut cfg.traffic_unsolicited, shared),
-        12 => {
-            enum_combo(
-                ui,
-                "collection_mode",
-                &mut cfg.collection_mode,
-                &CollectionMode::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
-        }
+        12 => toggle(ui, &mut cfg.csi_output, shared),
         13 => {
             let selected = format!(
                 "{} {}",
@@ -335,26 +319,7 @@ fn render_value(
         24 => toggle(ui, &mut cfg.he_csi_legacy_en, shared),
         25 => toggle(ui, &mut cfg.he_csi_ht20_en, shared),
         26 => toggle(ui, &mut cfg.he_csi_ht40_en, shared),
-        27 => toggle(ui, &mut cfg.he_csi_su_en, shared),
-        28 => toggle(ui, &mut cfg.he_csi_mu_en, shared),
-        29 => toggle(ui, &mut cfg.he_csi_dcm_en, shared),
-        30 => toggle(ui, &mut cfg.he_csi_beamformed_en, shared),
-        31 => {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut field_bufs.he_stbc).desired_width(50.0),
-                )
-                .changed()
-            {
-                shared.mark_config_dirty();
-                if let Ok(v) = field_bufs.he_stbc.trim().parse::<u32>() {
-                    if v <= 2 {
-                        cfg.he_stbc = v;
-                    }
-                }
-            }
-        }
-        32 => {
+        27 => {
             if ui
                 .add(
                     egui::TextEdit::singleline(&mut field_bufs.he_val_scale_cfg)
@@ -370,29 +335,36 @@ fn render_value(
                 }
             }
         }
-        33 => {
-            // One-button HE20 layout: applies the full HE-LTF-only preset in a
-            // single click (mirrors csi-webserver-rs). Clicking while active
-            // reverts to the default preset, leaving the HE toggles editable.
-            let active = cfg.csi_preset == CsiPreset::He20;
-            let label = if active {
-                "HE20 preset ✓ — click to clear"
-            } else {
-                "Apply HE20 preset"
-            };
-            if ui.button(label).clicked() {
-                if active {
-                    cfg.csi_preset = CsiPreset::Default;
-                } else {
-                    cfg.apply_he20_preset();
-                }
-                shared.mark_config_dirty();
-            }
+        28 => {
+            // Preset names come from the installed profile; this crate names
+            // none. `default` clears back to the individual acquisition flags.
+            let selected = cfg.csi_preset.clone().unwrap_or_else(|| "default".into());
+            egui::ComboBox::from_id_salt("csi_preset")
+                .selected_text(selected.clone())
+                .width(140.0)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(cfg.csi_preset.is_none(), "default")
+                        .clicked()
+                    {
+                        cfg.csi_preset = None;
+                        shared.mark_config_dirty();
+                    }
+                    for name in active_profile().preset_names() {
+                        if ui.selectable_label(selected == *name, *name).clicked() {
+                            cfg.csi_preset = Some((*name).to_string());
+                            // Fold the preset into the toggles so the panel
+                            // shows what the device will run.
+                            active_profile().apply_preset(name, cfg);
+                            shared.mark_config_dirty();
+                        }
+                    }
+                });
         }
-        34 => toggle(ui, &mut cfg.csi_dump_ack, shared),
-        35 => toggle(ui, &mut cfg.c5_csi_force_lltf, shared),
-        36 => toggle(ui, &mut cfg.c5_csi_vht, shared),
-        37 => {
+        29 => toggle(ui, &mut cfg.csi_dump_ack, shared),
+        30 => toggle(ui, &mut cfg.c5_csi_force_lltf, shared),
+        31 => toggle(ui, &mut cfg.c5_csi_vht, shared),
+        32 => {
             if ui
                 .add(
                     egui::TextEdit::singleline(&mut field_bufs.start_duration)

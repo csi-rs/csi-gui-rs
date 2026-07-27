@@ -4,7 +4,7 @@
 //! Wi-Fi Channel-State-Information (CSI) packets emitted by ESP32 devices
 //! running the [`esp-csi-cli-rs`] firmware.
 //!
-//! [`esp-csi-cli-rs`]: https://github.com/connectedmotion-io/esp-csi-cli-rs
+//! [`esp-csi-cli-rs`]: https://github.com/csi-rs/esp-csi-cli-rs
 //!
 //! Most users only need the [`csi-gui-rs` binary](../csi-gui-rs/index.html);
 //! this library crate exists so the same building blocks (serial reader,

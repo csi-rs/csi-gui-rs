@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// `csi_raw_data` is interleaved I/Q: `[I0, Q0, I1, Q1, ...]`. The number of
 /// subcarriers is `csi_raw_data.len() / 2` and is **dynamic** — common
-/// values are 53 (LLTF active subcarriers), 64 (HT-LTF), 128 (HT40), and
-/// 256 (HE20). Never hard-code 64; derive it from the live packet via
-/// [`subcarriers`](Self::subcarriers).
+/// values are 53 (LLTF active subcarriers), 64 (HT-LTF), and 128 (HT40);
+/// wider capture formats push it higher. Never hard-code 64; derive it from
+/// the live packet via [`subcarriers`](Self::subcarriers).
 ///
 /// The k-th array entry corresponds to physical subcarrier `k − N/2` —
 /// firmware emits in natural order with DC near the middle. Use

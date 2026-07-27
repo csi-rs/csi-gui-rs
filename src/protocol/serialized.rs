@@ -46,12 +46,15 @@ pub enum RxCsiFmtWire {
     SecaHtBw20Stbc = 10,
     SecaHtBw40 = 11,
     SecaHtBw40Stbc = 12,
-    // C5/C6 (esp-csi-rs 0.8.0) added these HE/VHT formats; the
+    // C5/C6 (esp-csi-rs 0.8.0) added the formats at 13..=15; the
     // discriminants must match `esp_csi_rs::csi::RxCSIFmt` exactly or
     // postcard rejects the enum during decode and the packet is dropped.
     VhtBw20 = 13,
-    He20Su = 14,
-    He20Mu = 15,
+    /// Held by formats this build does not name. Kept so the ordinals stay
+    /// aligned with the firmware and a packet carrying one still decodes.
+    Reserved14 = 14,
+    /// See [`Self::Reserved14`].
+    Reserved15 = 15,
     Undefined = 16,
 }
 
@@ -375,12 +378,12 @@ mod tests {
         assert_eq!(pkt.csi_raw_data, vec![5, -6]);
     }
 
-    /// Locks in the `RxCsiFmtWire` fix: a C6 packet whose `data_format` is
-    /// one of the HE/VHT values added in esp-csi-rs 0.8.0 (`He20Su` = 14)
-    /// must postcard-roundtrip. Before the enum was extended, discriminant
-    /// 14 didn't exist and the packet would fail to decode.
+    /// Locks in the `RxCsiFmtWire` fix: a C6 packet whose `data_format` is one
+    /// of the values added in esp-csi-rs 0.8.0 (discriminant 14) must
+    /// postcard-roundtrip. Before the enum was extended, 14 didn't exist and
+    /// the packet would fail to decode.
     #[test]
-    fn c6_he20su_data_format_round_trips() {
+    fn c6_reserved_data_format_round_trips() {
         let packet = CsiPacketHeC6 {
             mac: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
             rssi: -48,
@@ -406,19 +409,19 @@ mod tests {
             date_time: None,
             sequence_number: 9,
             csi_data_len: 3,
-            data_format: RxCsiFmtWire::He20Su,
+            data_format: RxCsiFmtWire::Reserved14,
             csi_data: vec![7, -8, 9],
         };
         // Struct-level roundtrip proves the new discriminant (de)serializes.
         let payload = postcard::to_allocvec(&packet).unwrap();
         let decoded: CsiPacketHeC6 = postcard::from_bytes(&payload).unwrap();
-        assert_eq!(decoded.data_format, RxCsiFmtWire::He20Su);
+        assert_eq!(decoded.data_format, RxCsiFmtWire::Reserved14);
 
         // And through the full COBS wire path used by the reader.
         let mut buf = vec![0u8; 1024];
         let cobs = postcard::to_slice_cobs(&packet, &mut buf).unwrap();
         let body = cobs.strip_suffix(&[0]).unwrap_or(cobs);
-        let pkt = decode_cobs_packet(body, ChipFamily::Esp32C6).expect("C6 HE20-SU decode");
+        let pkt = decode_cobs_packet(body, ChipFamily::Esp32C6).expect("C6 reserved-format decode");
         assert_eq!(pkt.mac, "11:22:33:44:55:66");
         assert_eq!(pkt.channel, 149);
         assert_eq!(pkt.csi_raw_data, vec![7, -8, 9]);

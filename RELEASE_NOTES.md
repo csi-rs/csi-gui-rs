@@ -9,7 +9,7 @@
 - **Framing** — Serialized mode uses `read_until('\0')` instead of byte-by-byte accumulation.
 - **Post-command handling** — After CLI writes, one null-delimited chunk is skipped (`drop_next_chunk`) instead of discarding up to 50 ms of port data via `drain_echo`.
 - **Firmware identification** — Restored `flush()` after serial writes; `read_one_frame` runs only while `ConnState::Streaming` so identify traffic is not consumed by the packet decoder; `info` is sent without marking the response for drop.
-- **Merge with upstream** — Integrated esp-csi-cli-rs 0.5.0 sync (ESP-NOW peer-MAC/HT40, raw delivery) while keeping AP config fields, ESP panel UI, and the decode/identify fixes above.
+- **Merge with upstream** — Integrated the esp-csi-cli-rs 0.5.0 sync (peer-MAC/HT40, raw delivery) while keeping AP config fields, ESP panel UI, and the decode/identify fixes above.
 
 ### Unchanged (still in place)
 
@@ -51,14 +51,25 @@
 
 ### Fixed
 
-- **Numeric field editing** — Traffic Hz, HE STBC, HE val scale, and start duration use persistent edit buffers. Backspacing no longer collapses values unexpectedly (e.g. `2|000` becoming `0`).
+- **Numeric field editing** — Traffic Hz, HE val scale, and start duration use persistent edit buffers. Backspacing no longer collapses values unexpectedly (e.g. `2|000` becoming `0`).
 - **Keyboard shortcut conflict** — Pane focus shortcuts (1–9, 0) are suppressed while a text field has keyboard focus, so typing digits in config fields no longer switches panes.
 
 ### Changed
 
-- **Enum fields use dropdowns** — Multi-value settings are now `ComboBox` widgets instead of click-to-cycle buttons (Wi-Fi mode, protocol, HT40, collection mode, log mode, PHY rate, CSI delivery).
-- **HE20 is a one-button preset** — The *HE: CSI preset* row is now a single **Apply HE20 preset** button (mirroring `csi-webserver-rs`) instead of a Default/He20 ComboBox. One click sets the full HE-LTF-only layout (`EspConfig::apply_he20_preset`) and collapses the pushed config to `set-csi --preset=he20`; clicking again clears back to the default preset.
+- **Enum fields use dropdowns** — Multi-value settings are now `ComboBox` widgets instead of click-to-cycle buttons (Wi-Fi mode, protocol, HT40, log mode, PHY rate, CSI delivery).
 - **Channel hidden in Station mode** — The Channel field is hidden and `set-wifi --set-channel` is omitted when Wi-Fi mode is Station, since the channel follows the associated AP.
+
+## Emitter / collector migration
+
+### Changed
+
+- **Wi-Fi mode vocabulary** — `set-wifi --mode=` now offers `station`, `sniffer`, `wifi-ap`, `ht20-emitter`, and `ht40-emitter`. The four ESP-NOW modes are gone: the firmware replaced central/peripheral with two roles, an **emitter** (TX only, raw-injects sounding frames, captures nothing) and a **collector** (captures and delivers). Station / softAP / sniffer are capture paths of the collector role.
+- **Destination MAC** — `--peer-mac` is now the emitter's injection destination (blank = broadcast) and is emitted for the emitter modes only. Bandwidth rides on the mode token, so there is no separate bandwidth flag.
+- **HT40 is a softAP knob** — `--ht40=above|below|none` sets the softAP's secondary channel and is emitted for `wifi-ap` only.
+- **`set-collection-mode` → `set-csi-output`** — The collector/listener pair stopped being independent of the role, and "collector" now names the RX role, so the flag would give one word two meanings. What survives is whether captured CSI is delivered off-device: `set-csi-output --enabled=true|false` (default `true`). With it off the radio still captures, so the RX path keeps its timing.
+- **Acquisition presets are pluggable** — Presets are no longer hard-coded. A build installs a `CsiProfile` (`src/protocol/profile.rs`) that names its own presets; the standard profile offers none and the preset row is hidden. An unresolved name falls back to the individual acquisition flags rather than pushing a token the firmware would reject.
+- **`set-csi` on C5/C6** — Emission is limited to the flags the firmware accepts: `--csi`, `--csi-legacy`, `--csi-ht20`, `--csi-ht40`, `--val-scale-cfg`, `--dump-ack`, plus the C5-only `--csi-force-lltf` / `--csi-vht`.
+- **Serialized data formats** — Wire discriminants 14 and 15 are `Reserved14` / `Reserved15`. The ordinals and the round-trip decode are unchanged; only the labels are neutral.
 
 ## Internal
 
@@ -68,7 +79,7 @@
 
 ## Verification
 
-- `cargo test` (38 unit tests)
+- `cargo test` (40 unit tests)
 - `cargo clippy -- -D warnings`
 - Manual:
   - Connect → Apply (Serialized) → Start — decode % rises quickly; firmware identifies reliably.

@@ -8,8 +8,8 @@ use std::collections::HashSet;
 /// Which Espressif SoC the firmware reports running on.
 ///
 /// `is_classic` covers ESP32 / C3 / S3 (legacy 802.11n); `is_he`
-/// covers C5 / C6 (802.11ax). The two groups have different `set-csi`
-/// options and different on-wire CSI struct layouts.
+/// covers C5 / C6. The two groups have different `set-csi` options and
+/// different on-wire CSI struct layouts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(missing_docs)] // each variant maps 1:1 to the SoC name
 pub enum ChipFamily {

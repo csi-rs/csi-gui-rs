@@ -100,7 +100,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
 
     // Compute the per-packet trace in the chosen scale. We skip packets with
     // a different subcarrier count rather than padding — the firmware shouldn't
-    // mix HT20/HT40/HE20 in the same stream during one analysis window.
+    // mix HT20 and HT40 in the same stream during one analysis window.
     let traces: Vec<Vec<f32>> = window
         .iter()
         .filter_map(|s| s.csi.as_ref())

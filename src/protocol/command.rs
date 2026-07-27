@@ -1,5 +1,6 @@
 use super::config::{EspConfig, LogMode, WifiMode};
 use crate::protocol::info::ChipFamily;
+use crate::protocol::profile::active_profile;
 
 /// Commands sent from the UI thread to the reader thread via mpsc.
 #[derive(Clone, Debug)]
@@ -68,18 +69,15 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         ));
     }
     out.push(format!("set-wifi --ap-dhcp={}", on_off(cfg.ap_dhcp)));
-    // `peer-mac` / `ht40` are ESP-NOW-only knobs. Emit them only for the
-    // ESP-NOW modes so other modes don't get spurious set-wifi lines. An
-    // empty `peer-mac` is sent verbatim to clear any prior filter back to
-    // automatic pairing.
-    if matches!(
-        cfg.wifi_mode,
-        WifiMode::EspNowCentral
-            | WifiMode::EspNowPeripheral
-            | WifiMode::EspNowFastCollector
-            | WifiMode::EspNowFastSource
-    ) {
+    // An emitter takes its bandwidth from the mode token itself and a
+    // destination for the injected frames. An empty `peer-mac` is sent verbatim
+    // to clear any prior destination back to broadcast.
+    if cfg.wifi_mode.is_emitter() {
         out.push(format!("set-wifi --peer-mac={}", cfg.peer_mac.trim()));
+    }
+    // `ht40` is the softAP's secondary channel, so only `wifi-ap` uses it;
+    // other modes would get a spurious set-wifi line.
+    if cfg.wifi_mode == WifiMode::WifiAp {
         out.push(format!("set-wifi --ht40={}", cfg.ht40.cli()));
     }
 
@@ -89,10 +87,7 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         cfg.traffic_hz,
         on_off(cfg.traffic_unsolicited)
     ));
-    out.push(format!(
-        "set-collection-mode --mode={}",
-        cfg.collection_mode.cli()
-    ));
+    out.push(format!("set-csi-output --enabled={}", cfg.csi_output));
     out.push(format!("set-rate --rate={}", cfg.phy_rate.cli()));
     out.push(format!(
         "set-io-tasks --tx={} --rx={}",
@@ -117,10 +112,16 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
             on_off(cfg.classic_ltf_merge_en),
         ));
     } else if chip.is_he() {
-        // The `he20` preset overrides the individual acquisition flags on the
-        // firmware side, so send it alone; otherwise send the explicit flags.
-        if cfg.csi_preset == crate::protocol::config::CsiPreset::He20 {
-            out.push("set-csi --preset=he20".to_string());
+        // A preset overrides the individual acquisition flags on the firmware
+        // side, so it is sent alone. Preset names are resolved by the installed
+        // profile — an unresolved name falls back to the explicit flags rather
+        // than pushing a token the firmware would reject.
+        let preset = cfg
+            .csi_preset
+            .as_deref()
+            .and_then(|name| active_profile().preset_cli(name));
+        if let Some(line) = preset {
+            out.push(line);
         } else {
             let mut parts = vec![
                 "set-csi".to_string(),
@@ -128,11 +129,6 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
                 format!("--csi-legacy={}", on_off(cfg.he_csi_legacy_en)),
                 format!("--csi-ht20={}", on_off(cfg.he_csi_ht20_en)),
                 format!("--csi-ht40={}", on_off(cfg.he_csi_ht40_en)),
-                format!("--csi-su={}", on_off(cfg.he_csi_su_en)),
-                format!("--csi-mu={}", on_off(cfg.he_csi_mu_en)),
-                format!("--csi-dcm={}", on_off(cfg.he_csi_dcm_en)),
-                format!("--csi-beamformed={}", on_off(cfg.he_csi_beamformed_en)),
-                format!("--csi-he-stbc={}", cfg.he_stbc),
                 format!("--val-scale-cfg={}", cfg.he_val_scale_cfg),
                 format!("--dump-ack={}", on_off(cfg.csi_dump_ack)),
             ];
@@ -187,34 +183,36 @@ fn quote_for_wire(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::protocol::config::{CsiDelivery, Ht40};
+    use crate::protocol::profile::{install_profile, CsiProfile};
 
     #[test]
-    fn esp_now_emits_peer_mac_and_ht40() {
+    fn emitter_emits_destination_mac() {
         let cfg = EspConfig {
-            wifi_mode: WifiMode::EspNowCentral,
+            wifi_mode: WifiMode::Ht40Emitter,
             peer_mac: "aa:bb:cc:dd:ee:ff".into(),
-            ht40: Ht40::Above,
             ..Default::default()
         };
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --mode=ht40-emitter".to_string()));
         assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
-        assert!(lines.contains(&"set-wifi --ht40=above".to_string()));
+        // Bandwidth rides on the mode token, so no `--ht40` for an emitter.
+        assert!(!lines.iter().any(|l| l.contains("--ht40=")));
     }
 
     #[test]
-    fn esp_now_empty_peer_mac_clears_to_auto() {
+    fn emitter_empty_destination_mac_clears_to_broadcast() {
         let cfg = EspConfig {
-            wifi_mode: WifiMode::EspNowPeripheral,
+            wifi_mode: WifiMode::Ht20Emitter,
             ..Default::default()
         };
-        // empty peer_mac is still emitted (verbatim) to clear back to auto.
+        // empty peer_mac is still emitted (verbatim) to clear back to broadcast.
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --mode=ht20-emitter".to_string()));
         assert!(lines.contains(&"set-wifi --peer-mac=".to_string()));
-        assert!(lines.contains(&"set-wifi --ht40=none".to_string()));
     }
 
     #[test]
-    fn non_esp_now_omits_peer_mac_and_ht40() {
+    fn collector_modes_omit_destination_mac() {
         let cfg = EspConfig {
             wifi_mode: WifiMode::Sniffer,
             peer_mac: "aa:bb:cc:dd:ee:ff".into(),
@@ -223,6 +221,29 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(!lines.iter().any(|l| l.contains("--peer-mac")));
         assert!(!lines.iter().any(|l| l.contains("--ht40")));
+    }
+
+    #[test]
+    fn wifi_ap_emits_ht40_secondary() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::WifiAp,
+            ht40: Ht40::Above,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --ht40=above".to_string()));
+        assert!(!lines.iter().any(|l| l.contains("--peer-mac")));
+    }
+
+    #[test]
+    fn csi_output_disabled_emits_false() {
+        let cfg = EspConfig {
+            csi_output: false,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-csi-output --enabled=false".to_string()));
+        assert!(!lines.iter().any(|l| l.starts_with("set-collection-mode")));
     }
 
     #[test]
@@ -247,14 +268,39 @@ mod tests {
         assert!(lines.contains(&"set-wifi --set-channel=6".to_string()));
     }
 
+    /// The only test that installs a profile: `active_profile()` is a
+    /// process-wide `OnceLock`, and every other test leaves `csi_preset` at
+    /// `None`, where the profile is never consulted.
     #[test]
-    fn he20_preset_collapses_to_single_flag() {
-        let mut cfg = EspConfig::default();
-        cfg.apply_he20_preset();
+    fn profile_preset_collapses_to_single_flag() {
+        struct TestProfile;
+        impl CsiProfile for TestProfile {
+            fn preset_names(&self) -> &'static [&'static str] {
+                &["probe"]
+            }
+            fn preset_cli(&self, name: &str) -> Option<String> {
+                (name == "probe").then(|| "set-csi --preset=probe".to_string())
+            }
+        }
+        install_profile(&TestProfile);
+
+        let cfg = EspConfig {
+            csi_preset: Some("probe".into()),
+            ..Default::default()
+        };
         let lines = render_apply_config(&cfg, ChipFamily::Esp32C6);
-        assert!(lines.contains(&"set-csi --preset=he20".to_string()));
+        assert!(lines.contains(&"set-csi --preset=probe".to_string()));
         // The verbose per-flag `set-csi --csi=…` line must not also appear.
         assert!(!lines.iter().any(|l| l.starts_with("set-csi --csi=")));
+
+        // A name the profile does not resolve falls back to the flags.
+        let cfg = EspConfig {
+            csi_preset: Some("nope".into()),
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32C6);
+        assert!(!lines.iter().any(|l| l.contains("--preset=")));
+        assert!(lines.iter().any(|l| l.starts_with("set-csi --csi=")));
     }
 
     #[test]
