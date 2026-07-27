@@ -183,7 +183,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     plot_ui.line(
                         Line::new("mean", mean_pts)
                             .color(Color32::from_rgb(110, 200, 255))
-                            .width(1.8),
+                            .width(1.8_f32),
                     );
                 }
                 // Handled above; left here so adding a new variant fails to

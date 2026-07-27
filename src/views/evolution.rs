@@ -122,7 +122,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             plot_ui.line(
                 Line::new(metric.label(), pts)
                     .color(Color32::from_rgb(110, 200, 255))
-                    .width(1.6),
+                    .width(1.6_f32),
             );
             // Horizontal-mean reference line via two-point polyline so
             // both axes stay finite under autoscale.
@@ -134,7 +134,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             plot_ui.line(
                 Line::new("mean", mean_pts)
                     .color(Color32::from_gray(120))
-                    .width(0.8),
+                    .width(0.8_f32),
             );
             if let Some(anchor) = ctx.view_anchor() {
                 plot_ui.vline(
