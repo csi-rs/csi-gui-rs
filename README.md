@@ -118,10 +118,13 @@ The ESP panel's **Configuration** section is a typed front-end for the firmware'
 understands; edits stay local until you press **Save & Apply**, which validates
 the whole config and pushes it to the device in one batch.
 
-**Roles.** The firmware splits nodes into two roles. An **emitter** raw-injects
-sounding frames and captures nothing; a **collector** captures CSI and delivers
-it. Station, sniffer and softAP are the collector's capture paths, so they have
-no role token of their own.
+**The node model.** A node is described by four independent attributes: what it
+contributes to the network, whether its measurements leave it, how it reaches the
+channel, and what part it plays in the session. The **Wi-Fi Mode** selector sets
+the third; the rest come with it, because which values a mode admits depends on
+the mode — an emitter is always a central listener, a sniffer always a peripheral
+collector. The model is documented once, in
+[`esp-csi-rs/docs/network-model.md`](https://github.com/csi-rs/esp-csi-rs/blob/main/docs/network-model.md).
 
 **Mode-aware fields.** Selecting a **Wi-Fi Mode** reshapes the panel so you only
 see knobs that take effect:

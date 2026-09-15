@@ -11,12 +11,12 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Wi-Fi operating mode — what the firmware's PHY/MAC layer does.
+/// The node's **operational mode** — how it reaches the channel.
 ///
-/// The firmware splits nodes into two roles. An **emitter** only raw-injects
-/// sounding frames and captures nothing; a **collector** captures CSI and
-/// delivers it. Station, sniffer and softAP are the collector's capture paths,
-/// so they carry no role token of their own.
+/// This is one of four independent attributes describing a node; the others (network role,
+/// collection mode, session role) are carried by the mode rather than selected here, because which
+/// values a mode admits depends on the mode. The model is documented once, in
+/// `esp-csi-rs/docs/network-model.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WifiMode {
     /// Collector: associate to an AP using the configured SSID/password.
@@ -29,15 +29,27 @@ pub enum WifiMode {
     Ht20Emitter,
     /// Emitter: raw-inject HT40 sounding frames.
     Ht40Emitter,
+    /// ESP-NOW, central end: originates the control traffic.
+    EspNowCentral,
+    /// ESP-NOW, peripheral end: answers it.
+    EspNowPeripheral,
+    /// ESP-NOW simplex, flooding end. A central listener — it reports no CSI of its own.
+    EspNowSimplexSource,
+    /// ESP-NOW simplex, measuring end. The highest CSI rate of any pairing.
+    EspNowSimplexPeer,
 }
 
 impl WifiMode {
-    pub const ALL: [WifiMode; 5] = [
+    pub const ALL: [WifiMode; 9] = [
         WifiMode::Station,
         WifiMode::Sniffer,
         WifiMode::WifiAp,
         WifiMode::Ht20Emitter,
         WifiMode::Ht40Emitter,
+        WifiMode::EspNowCentral,
+        WifiMode::EspNowPeripheral,
+        WifiMode::EspNowSimplexSource,
+        WifiMode::EspNowSimplexPeer,
     ];
 
     /// CLI token used by `set-wifi --mode=…`.
@@ -48,12 +60,25 @@ impl WifiMode {
             Self::WifiAp => "wifi-ap",
             Self::Ht20Emitter => "ht20-emitter",
             Self::Ht40Emitter => "ht40-emitter",
+            Self::EspNowCentral => "esp-now-central",
+            Self::EspNowPeripheral => "esp-now-peripheral",
+            // The firmware's own strings. It also accepts `esp-now-simplex-{source,peer}`;
+            // emitting the originals keeps older devices working.
+            Self::EspNowSimplexSource => "esp-now-fast-source",
+            Self::EspNowSimplexPeer => "esp-now-fast-collector",
         }
     }
-    /// `true` for the emitter roles. They inject frames and capture nothing,
-    /// so they take a destination MAC and ignore the capture-side knobs.
+    /// `true` for the emitter modes. They inject frames and capture nothing, so they take a
+    /// destination MAC and ignore the capture-side knobs.
     pub fn is_emitter(self) -> bool {
         matches!(self, Self::Ht20Emitter | Self::Ht40Emitter)
+    }
+
+    /// `true` for the modes that report no CSI of their own — the emitters and the simplex source.
+    /// All three are central listeners: they put energy in the channel and measure nothing, so
+    /// there is no capture-side configuration to show.
+    pub fn reports_no_csi(self) -> bool {
+        self.is_emitter() || matches!(self, Self::EspNowSimplexSource)
     }
     /// Round-robin to the next mode (used by the config panel's
     /// click-to-cycle button). Every variant must appear exactly once or
@@ -64,7 +89,11 @@ impl WifiMode {
             Self::Station => Self::WifiAp,
             Self::WifiAp => Self::Ht20Emitter,
             Self::Ht20Emitter => Self::Ht40Emitter,
-            Self::Ht40Emitter => Self::Sniffer,
+            Self::Ht40Emitter => Self::EspNowCentral,
+            Self::EspNowCentral => Self::EspNowPeripheral,
+            Self::EspNowPeripheral => Self::EspNowSimplexSource,
+            Self::EspNowSimplexSource => Self::EspNowSimplexPeer,
+            Self::EspNowSimplexPeer => Self::Sniffer,
         }
     }
 }
