@@ -22,6 +22,6 @@ pub mod profile;
 pub mod serialized;
 
 pub use command::EspCommand;
-pub use config::{CsiDelivery, EspConfig, LogMode, PhyRate, WifiMode, ESP_CONFIG_FIELDS};
+pub use config::{CollectionMode, CsiDelivery, EspConfig, LogMode, PhyRate, WifiMode, ESP_CONFIG_FIELDS};
 pub use info::{ChipFamily, DeviceInfo};
 pub use profile::{CsiProfile, StandardCsiProfile};

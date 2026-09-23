@@ -69,16 +69,22 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         ));
     }
     out.push(format!("set-wifi --ap-dhcp={}", on_off(cfg.ap_dhcp)));
-    // An emitter takes its bandwidth from the mode token itself and a
-    // destination for the injected frames. An empty `peer-mac` is sent verbatim
-    // to clear any prior destination back to broadcast.
-    if cfg.wifi_mode.is_emitter() {
+    // `peer-mac` is an emitter's injection destination and an ESP-NOW node's
+    // explicit peer. An empty value is sent verbatim to clear it (back to
+    // broadcast, or back to automatic pairing).
+    if cfg.wifi_mode.uses_peer_mac() {
         out.push(format!("set-wifi --peer-mac={}", cfg.peer_mac.trim()));
     }
-    // `ht40` is the softAP's secondary channel, so only `wifi-ap` uses it;
-    // other modes would get a spurious set-wifi line.
-    if cfg.wifi_mode == WifiMode::WifiAp {
+    // `ht40` is the softAP's secondary channel in `wifi-ap` and the forced
+    // per-peer TX PHY in the ESP-NOW modes; other modes would get a spurious
+    // set-wifi line.
+    if cfg.wifi_mode.uses_ht40() {
         out.push(format!("set-wifi --ht40={}", cfg.ht40.cli()));
+    }
+    // The collection mode is only read by the modes that admit a choice; the
+    // rest fix it, so it is not sent there.
+    if cfg.wifi_mode.admits_collection_choice() {
+        out.push(format!("set-wifi --collection={}", cfg.collection.cli()));
     }
 
     out.push(format!("set-protocol --protocol={}", cfg.protocol.cli()));
@@ -111,7 +117,7 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
             on_off(cfg.classic_stbc_htltf_en),
             on_off(cfg.classic_ltf_merge_en),
         ));
-    } else if chip.is_he() {
+    } else if chip.is_c5c6() {
         // A preset overrides the individual acquisition flags on the firmware
         // side, so it is sent alone. Preset names are resolved by the installed
         // profile — an unresolved name falls back to the explicit flags rather
@@ -125,11 +131,11 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
         } else {
             let mut parts = vec![
                 "set-csi".to_string(),
-                format!("--csi={}", on_off(cfg.he_csi_en)),
-                format!("--csi-legacy={}", on_off(cfg.he_csi_legacy_en)),
-                format!("--csi-ht20={}", on_off(cfg.he_csi_ht20_en)),
-                format!("--csi-ht40={}", on_off(cfg.he_csi_ht40_en)),
-                format!("--val-scale-cfg={}", cfg.he_val_scale_cfg),
+                format!("--csi={}", on_off(cfg.c5c6_csi_en)),
+                format!("--csi-legacy={}", on_off(cfg.c5c6_csi_legacy_en)),
+                format!("--csi-ht20={}", on_off(cfg.c5c6_csi_ht20_en)),
+                format!("--csi-ht40={}", on_off(cfg.c5c6_csi_ht40_en)),
+                format!("--val-scale-cfg={}", cfg.c5c6_val_scale_cfg),
                 format!("--dump-ack={}", on_off(cfg.csi_dump_ack)),
             ];
             // C5-only acquisition toggles.
@@ -182,7 +188,7 @@ fn quote_for_wire(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::config::{CsiDelivery, Ht40};
+    use crate::protocol::config::{CollectionMode, CsiDelivery, Ht40};
     use crate::protocol::profile::{install_profile, CsiProfile};
 
     #[test]
@@ -233,6 +239,72 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(lines.contains(&"set-wifi --ht40=above".to_string()));
         assert!(!lines.iter().any(|l| l.contains("--peer-mac")));
+    }
+
+    #[test]
+    fn collection_mode_sent_only_where_admitted() {
+        for mode in [
+            WifiMode::Station,
+            WifiMode::WifiAp,
+            WifiMode::EspNowCentral,
+            WifiMode::EspNowPeripheral,
+        ] {
+            let cfg = EspConfig {
+                wifi_mode: mode,
+                collection: CollectionMode::Listener,
+                ..Default::default()
+            };
+            let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+            assert!(
+                lines.contains(&"set-wifi --collection=listener".to_string()),
+                "{mode:?} should send --collection"
+            );
+        }
+        for mode in [
+            WifiMode::Sniffer,
+            WifiMode::Ht20Emitter,
+            WifiMode::Ht40Emitter,
+            WifiMode::EspNowSimplexSource,
+            WifiMode::EspNowSimplexPeer,
+        ] {
+            let cfg = EspConfig {
+                wifi_mode: mode,
+                collection: CollectionMode::Listener,
+                ..Default::default()
+            };
+            let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+            assert!(
+                !lines.iter().any(|l| l.contains("--collection")),
+                "{mode:?} fixes its collection mode"
+            );
+        }
+    }
+
+    #[test]
+    fn esp_now_pair_emits_peer_mac_and_ht40() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::EspNowPeripheral,
+            peer_mac: "aa:bb:cc:dd:ee:ff".into(),
+            ht40: Ht40::Below,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
+        assert!(lines.contains(&"set-wifi --ht40=below".to_string()));
+        assert!(lines.contains(&"set-wifi --collection=collector".to_string()));
+    }
+
+    #[test]
+    fn simplex_peer_takes_peer_mac_but_not_ht40() {
+        let cfg = EspConfig {
+            wifi_mode: WifiMode::EspNowSimplexPeer,
+            peer_mac: "aa:bb:cc:dd:ee:ff".into(),
+            ht40: Ht40::Above,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
+        assert!(!lines.iter().any(|l| l.contains("--ht40")));
     }
 
     #[test]

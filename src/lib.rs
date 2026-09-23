@@ -6,7 +6,7 @@
 //!
 //! [`esp-csi-cli-rs`]: https://github.com/csi-rs/esp-csi-cli-rs
 //!
-//! Most users only need the [`csi-gui-rs` binary](../csi-gui-rs/index.html);
+//! Most users only need the `csi-gui-rs` binary (`cargo install csi-gui-rs`);
 //! this library crate exists so the same building blocks (serial reader,
 //! parsers, history buffer, visualizations, Rerun sink, persistence) can be
 //! reused in other tools or wrapped in custom front-ends.

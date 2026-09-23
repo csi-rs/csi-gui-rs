@@ -4,10 +4,11 @@
 //! cycle/serialize/render-as-CLI on demand. They are the GUI's
 //! source-of-truth for what gets pushed to the device with `ApplyConfig`.
 //!
-//! Grammar matches esp-csi-cli-rs v0.7.x (protocol 2): `set-csi` flags are
+//! Grammar matches esp-csi-cli-rs v0.8.0 or later: `set-csi` flags are
 //! positive `on|off` toggles (not the old `--disable-*` booleans), and the
-//! surface includes AP mode, the emitter modes, `set-protocol`, unsolicited
-//! traffic, `raw` CSI delivery, the CSI-output toggle, and C5-only toggles.
+//! surface includes AP mode, the emitter and ESP-NOW modes, the collection
+//! mode (`set-wifi --collection`), `set-protocol`, unsolicited traffic, `raw`
+//! CSI delivery, the CSI-output delivery gate, and C5-only toggles.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,26 +17,31 @@ use serde::{Deserialize, Serialize};
 /// This is one of four independent attributes describing a node; the others (network role,
 /// collection mode, session role) are carried by the mode rather than selected here, because which
 /// values a mode admits depends on the mode. The model is documented once, in
-/// `esp-csi-rs/docs/network-model.md`.
+/// [`esp-csi-rs/docs/network-model.md`](https://github.com/csi-rs/esp-csi-rs/blob/main/docs/network-model.md).
+///
+/// Where a mode admits a choice of collection mode, [`EspConfig::collection`] picks it; see
+/// [`WifiMode::admits_collection_choice`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WifiMode {
-    /// Collector: associate to an AP using the configured SSID/password.
+    /// Wi-Fi station: associate to an AP using the configured SSID/password. Collector or
+    /// listener.
     Station,
-    /// Collector: promiscuous capture without association.
+    /// Wi-Fi sniffer: promiscuous capture without association. Always a collector.
     Sniffer,
-    /// Collector: self-contained softAP (DHCP + ICMP flood).
+    /// Wi-Fi access point: self-contained softAP (DHCP + ICMP flood). Collector or listener.
     WifiAp,
-    /// Emitter: raw-inject HT20 sounding frames.
+    /// Emitter: raw-inject HT20 sounding frames. A central listener that captures nothing.
     Ht20Emitter,
-    /// Emitter: raw-inject HT40 sounding frames.
+    /// Emitter: raw-inject HT40 sounding frames. A central listener that captures nothing.
     Ht40Emitter,
-    /// ESP-NOW, central end: originates the control traffic.
+    /// ESP-NOW, central end: originates the control traffic. Collector or listener.
     EspNowCentral,
-    /// ESP-NOW, peripheral end: answers it.
+    /// ESP-NOW, peripheral end: answers it. Collector or listener.
     EspNowPeripheral,
     /// ESP-NOW simplex, flooding end. A central listener — it reports no CSI of its own.
     EspNowSimplexSource,
-    /// ESP-NOW simplex, measuring end. The highest CSI rate of any pairing.
+    /// ESP-NOW simplex, measuring end. A peripheral collector; the highest CSI rate of any
+    /// pairing.
     EspNowSimplexPeer,
 }
 
@@ -75,10 +81,53 @@ impl WifiMode {
     }
 
     /// `true` for the modes that report no CSI of their own — the emitters and the simplex source.
-    /// All three are central listeners: they put energy in the channel and measure nothing, so
-    /// there is no capture-side configuration to show.
+    /// All three are central listeners: the emitters capture nothing, and the simplex source
+    /// captures but never reports, so there is no capture-side configuration to show.
     pub fn reports_no_csi(self) -> bool {
         self.is_emitter() || matches!(self, Self::EspNowSimplexSource)
+    }
+
+    /// `true` for the four ESP-NOW modes (the pair and both simplex ends).
+    pub fn is_esp_now(self) -> bool {
+        matches!(
+            self,
+            Self::EspNowCentral
+                | Self::EspNowPeripheral
+                | Self::EspNowSimplexSource
+                | Self::EspNowSimplexPeer
+        )
+    }
+
+    /// `true` for the modes whose collection mode is a choice rather than fixed by the mode:
+    /// station, access point and the ESP-NOW pair. Only these send `set-wifi --collection`;
+    /// the sniffer is always a collector, the emitters always listeners, and each simplex end is
+    /// fixed by which end it is.
+    pub fn admits_collection_choice(self) -> bool {
+        matches!(
+            self,
+            Self::Station | Self::WifiAp | Self::EspNowCentral | Self::EspNowPeripheral
+        )
+    }
+
+    /// `true` for the modes that read `set-wifi --peer-mac`: the emitters (injection
+    /// destination) and every ESP-NOW mode (explicit peer, set on both nodes).
+    pub fn uses_peer_mac(self) -> bool {
+        self.is_emitter() || self.is_esp_now()
+    }
+
+    /// `true` for the modes that read `set-wifi --ht40`: the access point (softAP secondary
+    /// channel) and the ESP-NOW modes that transmit to a peer (forced per-peer TX PHY).
+    pub fn uses_ht40(self) -> bool {
+        matches!(
+            self,
+            Self::WifiAp | Self::EspNowCentral | Self::EspNowPeripheral | Self::EspNowSimplexSource
+        )
+    }
+
+    /// `true` for the modes that apply `set-rate`: the ESP-NOW pair. Everywhere else the rate is
+    /// reporting only.
+    pub fn applies_phy_rate(self) -> bool {
+        matches!(self, Self::EspNowCentral | Self::EspNowPeripheral)
     }
     /// Round-robin to the next mode (used by the config panel's
     /// click-to-cycle button). Every variant must appear exactly once or
@@ -99,27 +148,40 @@ impl WifiMode {
 }
 
 /// Wi-Fi PHY protocol (`set-protocol --protocol=…`). Firmware default is `lr`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Deserialization is lenient: a name this build does not know (e.g. one a
+/// saved config from an older release carries) falls back to the default,
+/// [`WifiProtocol::Lr`], instead of failing the whole config.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Default)]
 #[allow(missing_docs)] // each variant maps 1:1 to a CLI token
 pub enum WifiProtocol {
     B,
     G,
     N,
+    #[default]
     Lr,
     A,
     Ac,
-    Ax,
+}
+
+impl<'de> Deserialize<'de> for WifiProtocol {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(d)?;
+        Ok(Self::ALL
+            .into_iter()
+            .find(|p| name.eq_ignore_ascii_case(p.cli()))
+            .unwrap_or_default())
+    }
 }
 
 impl WifiProtocol {
-    pub const ALL: [WifiProtocol; 7] = [
+    pub const ALL: [WifiProtocol; 6] = [
         WifiProtocol::B,
         WifiProtocol::G,
         WifiProtocol::N,
         WifiProtocol::Lr,
         WifiProtocol::A,
         WifiProtocol::Ac,
-        WifiProtocol::Ax,
     ];
 
     /// CLI token used by `set-protocol --protocol=…`.
@@ -131,7 +193,6 @@ impl WifiProtocol {
             Self::Lr => "lr",
             Self::A => "a",
             Self::Ac => "ac",
-            Self::Ax => "ax",
         }
     }
     /// Round-robin to the next protocol.
@@ -142,14 +203,14 @@ impl WifiProtocol {
             Self::N => Self::Lr,
             Self::Lr => Self::A,
             Self::A => Self::Ac,
-            Self::Ac => Self::Ax,
-            Self::Ax => Self::B,
+            Self::Ac => Self::B,
         }
     }
 }
 
-/// SoftAP secondary channel (`set-wifi --ht40=…`), which runs the AP as HT40.
-/// `None` keeps it at HT20. `wifi-ap` mode only.
+/// HT40 secondary channel (`set-wifi --ht40=…`). In `wifi-ap` it runs the
+/// softAP as HT40; in the ESP-NOW modes it forces the per-peer TX PHY to
+/// HT40. `None` keeps HT20. See [`WifiMode::uses_ht40`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Ht40 {
     /// HT20 / legacy (the `none` token).
@@ -178,6 +239,34 @@ impl Ht40 {
             Self::None => Self::Above,
             Self::Above => Self::Below,
             Self::Below => Self::None,
+        }
+    }
+}
+
+/// The node's **collection mode** (`set-wifi --collection=…`): whether the
+/// CSI it captures leaves the node. A collector reports it; a listener
+/// captures but does not report.
+///
+/// Only read by the modes that admit a choice
+/// ([`WifiMode::admits_collection_choice`]); every other mode fixes it.
+/// Needs esp-csi-cli-rs 0.8.0 or later.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CollectionMode {
+    /// Report captured CSI (the firmware default).
+    #[default]
+    Collector,
+    /// Capture, but do not report.
+    Listener,
+}
+
+impl CollectionMode {
+    pub const ALL: [CollectionMode; 2] = [CollectionMode::Collector, CollectionMode::Listener];
+
+    /// CLI token used by `set-wifi --collection=…`.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::Collector => "collector",
+            Self::Listener => "listener",
         }
     }
 }
@@ -291,9 +380,9 @@ impl CsiDelivery {
 }
 
 /// PHY rate the firmware uses when transmitting (`set-rate --rate=…`).
-/// Stored and echoed by `show-config`, but no mode applies it directly:
-/// collector modes derive their rate from the surrounding radio configuration
-/// and an emitter transmits at the rate its forced TX PHY implies.
+/// Reporting only (stored and echoed by `show-config`), except on the ESP-NOW
+/// pair (`esp-now-central` / `esp-now-peripheral`), which applies it. See
+/// [`WifiMode::applies_phy_rate`].
 ///
 /// `RxxL` variants are 802.11b long-preamble; `Mcs*Lgi` / `Mcs*Sgi` are
 /// 802.11n MCS indices with long/short guard interval.
@@ -350,8 +439,12 @@ impl PhyRate {
 /// to `true` (the firmware default is "all CSI features on").
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EspConfig {
-    /// Wi-Fi operating mode (`set-wifi --mode=…`).
+    /// Operational mode (`set-wifi --mode=…`).
     pub wifi_mode: WifiMode,
+    /// Collection mode (`set-wifi --collection=…`). Sent only for the modes
+    /// that admit a choice; see [`WifiMode::admits_collection_choice`].
+    #[serde(default)]
+    pub collection: CollectionMode,
     /// Wi-Fi PHY protocol (`set-protocol --protocol=…`).
     pub protocol: WifiProtocol,
     /// Primary channel (`set-wifi --set-channel=…`). Must satisfy
@@ -367,24 +460,30 @@ pub struct EspConfig {
     pub ap_password: String,
     /// Serve DHCP in AP mode (`set-wifi --ap-dhcp=on|off`).
     pub ap_dhcp: bool,
-    /// Destination MAC for injected frames (`set-wifi --peer-mac=…`). Empty
-    /// injects to broadcast. Emitter modes only.
+    /// Peer MAC (`set-wifi --peer-mac=…`). In the emitter modes it is the
+    /// destination for injected frames (empty = broadcast); in the ESP-NOW
+    /// modes it is the explicit peer (empty = automatic pairing), and must be
+    /// set on both nodes. See [`WifiMode::uses_peer_mac`].
     #[serde(default)]
     pub peer_mac: String,
-    /// SoftAP secondary channel (`set-wifi --ht40=…`). `wifi-ap` mode only.
+    /// HT40 secondary channel (`set-wifi --ht40=…`): the softAP's in
+    /// `wifi-ap`, the forced per-peer TX PHY in the ESP-NOW modes. See
+    /// [`WifiMode::uses_ht40`].
     #[serde(default)]
     pub ht40: Ht40,
     /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
     pub traffic_hz: u64,
     /// One-directional unsolicited ICMP-reply flood (`set-traffic --unsolicited=…`).
     pub traffic_unsolicited: bool,
-    /// Deliver captured CSI off-device (`set-csi-output --enabled=…`). With it
-    /// off the radio still captures — nothing is decoded or logged — so the RX
-    /// path keeps its timing. No effect on an emitter, which captures nothing.
+    /// Runtime CSI delivery gate (`set-csi-output --enabled=…`). With it off
+    /// the radio still captures — nothing is decoded or logged — so the RX
+    /// path keeps its timing. This is not the collection mode; see
+    /// [`EspConfig::collection`]. No effect on an emitter, which captures nothing.
     pub csi_output: bool,
     /// Wire format for emitted CSI packets (`set-log-mode`).
     pub log_mode: LogMode,
-    /// PHY rate to transmit at (`set-rate`).
+    /// PHY rate (`set-rate`). Applied only by the ESP-NOW pair; reporting only
+    /// elsewhere.
     pub phy_rate: PhyRate,
     /// Spawn the TX task on `start` (`set-io-tasks --tx=…`).
     pub tx_task: bool,
@@ -404,16 +503,23 @@ pub struct EspConfig {
     /// Classic chips: LTF merging (`--ltf-merge=on|off`).
     pub classic_ltf_merge_en: bool,
 
+    // The `alias`es on the five `c5c6_*` fields below keep configs saved
+    // before 1.1.0, which used an older prefix, loading.
     /// ESP32-C5/C6: master CSI acquisition switch (`set-csi --csi=on|off`).
-    pub he_csi_en: bool,
+    #[serde(alias = "he_csi_en")]
+    pub c5c6_csi_en: bool,
     /// ESP32-C5/C6: L-LTF on 11g PPDU (`--csi-legacy=on|off`).
-    pub he_csi_legacy_en: bool,
+    #[serde(alias = "he_csi_legacy_en")]
+    pub c5c6_csi_legacy_en: bool,
     /// ESP32-C5/C6: HT-LTF on HT20 PPDU (`--csi-ht20=on|off`).
-    pub he_csi_ht20_en: bool,
+    #[serde(alias = "he_csi_ht20_en")]
+    pub c5c6_csi_ht20_en: bool,
     /// ESP32-C5/C6: HT-LTF on HT40 PPDU (`--csi-ht40=on|off`).
-    pub he_csi_ht40_en: bool,
+    #[serde(alias = "he_csi_ht40_en")]
+    pub c5c6_csi_ht40_en: bool,
     /// ESP32-C5/C6: value-scale config 0..=3 (`--val-scale-cfg=…`).
-    pub he_val_scale_cfg: u32,
+    #[serde(alias = "he_val_scale_cfg")]
+    pub c5c6_val_scale_cfg: u32,
     /// Named acquisition preset (`--preset=…`). `None` emits the individual
     /// flags instead. Names are resolved by the installed
     /// [`CsiProfile`](crate::protocol::profile::CsiProfile) — this crate names
@@ -436,6 +542,7 @@ impl Default for EspConfig {
     fn default() -> Self {
         Self {
             wifi_mode: WifiMode::Sniffer,
+            collection: CollectionMode::Collector,
             protocol: WifiProtocol::Lr,
             channel: 6,
             sta_ssid: String::new(),
@@ -460,11 +567,11 @@ impl Default for EspConfig {
             classic_stbc_htltf_en: true,
             classic_ltf_merge_en: true,
 
-            he_csi_en: true,
-            he_csi_legacy_en: true,
-            he_csi_ht20_en: true,
-            he_csi_ht40_en: true,
-            he_val_scale_cfg: 2,
+            c5c6_csi_en: true,
+            c5c6_csi_legacy_en: true,
+            c5c6_csi_ht20_en: true,
+            c5c6_csi_ht40_en: true,
+            c5c6_val_scale_cfg: 2,
             csi_preset: None,
             csi_dump_ack: true,
             c5_csi_force_lltf: true,
@@ -494,7 +601,7 @@ impl EspConfig {
         if !self.peer_mac.trim().is_empty() && parse_mac(&self.peer_mac).is_none() {
             return Err("Destination MAC must be aa:bb:cc:dd:ee:ff".into());
         }
-        if self.he_val_scale_cfg > 3 {
+        if self.c5c6_val_scale_cfg > 3 {
             return Err("val_scale_cfg must be 0..=3".into());
         }
         if !valid_channel(self.channel) {
@@ -565,8 +672,9 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "AP SSID",
     "AP Password",
     "AP DHCP",
-    "Dest MAC (emitter)",
-    "HT40 (AP secondary)",
+    "Peer MAC (emitter / ESP-NOW)",
+    "HT40 (AP / ESP-NOW)",
+    "Collection mode",
     "Traffic Hz",
     "Traffic Unsolicited",
     "CSI Output",
@@ -580,14 +688,70 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "Classic: HT-LTF",
     "Classic: STBC-HT-LTF",
     "Classic: LTF-merge",
-    "HE: CSI",
-    "HE: CSI legacy",
-    "HE: CSI HT20",
-    "HE: CSI HT40",
-    "HE: val_scale_cfg (0..3)",
+    "C5/C6: CSI",
+    "C5/C6: CSI legacy",
+    "C5/C6: CSI HT20",
+    "C5/C6: CSI HT40",
+    "C5/C6: val_scale_cfg (0..3)",
     "CSI preset",
-    "HE: dump ACK",
+    "C5/C6: dump ACK",
     "C5: force LLTF",
     "C5: VHT",
     "Start duration (sec, blank = ∞)",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config saved by an older release uses the previous field names and
+    /// may carry a PHY protocol this build no longer offers. It must still
+    /// load, with the old values carried over and the protocol falling back
+    /// to the default.
+    #[test]
+    fn old_saved_config_loads_through_aliases() {
+        let mut v = serde_json::to_value(EspConfig::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        for new in [
+            "c5c6_csi_en",
+            "c5c6_csi_legacy_en",
+            "c5c6_csi_ht20_en",
+            "c5c6_csi_ht40_en",
+            "c5c6_val_scale_cfg",
+            "collection",
+        ] {
+            obj.remove(new).unwrap();
+        }
+        // The pre-1.1.0 field names, which the `serde(alias)`es accept.
+        obj.insert("he_csi_en".into(), false.into());
+        obj.insert("he_csi_legacy_en".into(), false.into());
+        obj.insert("he_csi_ht20_en".into(), true.into());
+        obj.insert("he_csi_ht40_en".into(), false.into());
+        obj.insert("he_val_scale_cfg".into(), 1.into());
+        // A protocol variant removed in 1.1.0 (the firmware never accepted it).
+        obj.insert("protocol".into(), "Ax".into());
+
+        let cfg: EspConfig = serde_json::from_value(v).unwrap();
+        assert!(!cfg.c5c6_csi_en);
+        assert!(!cfg.c5c6_csi_legacy_en);
+        assert!(cfg.c5c6_csi_ht20_en);
+        assert!(!cfg.c5c6_csi_ht40_en);
+        assert_eq!(cfg.c5c6_val_scale_cfg, 1);
+        assert_eq!(cfg.protocol, WifiProtocol::Lr);
+        assert_eq!(cfg.collection, CollectionMode::Collector);
+
+        // And the current names round-trip unchanged.
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: EspConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.c5c6_val_scale_cfg, 1);
+        assert_eq!(back.protocol, WifiProtocol::Lr);
+    }
+
+    #[test]
+    fn every_protocol_round_trips() {
+        for p in WifiProtocol::ALL {
+            let json = serde_json::to_string(&p).unwrap();
+            assert_eq!(serde_json::from_str::<WifiProtocol>(&json).unwrap(), p);
+        }
+    }
+}
