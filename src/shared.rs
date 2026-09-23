@@ -9,7 +9,7 @@ use std::sync::Arc;
 /// Default serial baud rate. Matches the [`esp-csi-cli-rs`] firmware
 /// default (`espflash monitor` also defaults to this).
 ///
-/// [`esp-csi-cli-rs`]: https://github.com/connectedmotion-io/esp-csi-cli-rs
+/// [`esp-csi-cli-rs`]: https://github.com/csi-rs/esp-csi-cli-rs
 pub const DEFAULT_BAUD: u32 = 115_200;
 
 /// Lock-free state shared between the reader thread and the UI thread.

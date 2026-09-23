@@ -1,15 +1,15 @@
 //! Firmware identification: parse the `info` response into a
 //! [`DeviceInfo`], including the [`ChipFamily`] used to gate
-//! chip-specific config options (classic vs HE).
+//! chip-specific config options (classic vs ESP32-C5/C6).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Which Espressif SoC the firmware reports running on.
 ///
-/// `is_classic` covers ESP32 / C3 / S3 (legacy 802.11n); `is_he`
-/// covers C5 / C6 (802.11ax). The two groups have different `set-csi`
-/// options and different on-wire CSI struct layouts.
+/// `is_classic` covers ESP32 / C3 / S3 (legacy 802.11n); `is_c5c6`
+/// covers C5 / C6. The two groups have different `set-csi` options and
+/// different on-wire CSI struct layouts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(missing_docs)] // each variant maps 1:1 to the SoC name
 pub enum ChipFamily {
@@ -36,8 +36,8 @@ impl ChipFamily {
         }
     }
 
-    /// `true` for HE-class chips (ESP32-C5, ESP32-C6).
-    pub fn is_he(self) -> bool {
+    /// `true` for ESP32-C5 and ESP32-C6.
+    pub fn is_c5c6(self) -> bool {
         matches!(self, Self::Esp32C5 | Self::Esp32C6)
     }
 

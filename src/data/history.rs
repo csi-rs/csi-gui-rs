@@ -213,10 +213,11 @@ mod tests {
     use super::*;
 
     fn make_packet(seed: i32) -> CsiData {
-        let mut p = CsiData::default();
-        p.csi_raw_data = vec![seed, 0];
-        p.data_length = 2;
-        p
+        CsiData {
+            csi_raw_data: vec![seed, 0],
+            data_length: 2,
+            ..Default::default()
+        }
     }
 
     #[test]

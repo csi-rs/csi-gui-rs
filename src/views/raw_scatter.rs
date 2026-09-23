@@ -118,7 +118,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                 plot_ui.points(
                     Points::new(name, PlotPoints::from(pts))
                         .color(color)
-                        .radius(1.6),
+                        .radius(1.6_f32),
                 );
             }
         });

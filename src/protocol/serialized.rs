@@ -4,7 +4,7 @@
 //! Inside the record is a `postcard`-serialized `CSIDataPacket` whose
 //! field order matches `esp-csi-rs/src/lib/csi.rs`. Two distinct
 //! schemas exist on the wire — classic chips (ESP32 / C3 / S3) and the
-//! HE chips (ESP32-C5 / C6). Both end with `csi_data: Vec<i8, 612>`.
+//! ESP32-C5 / C6. Both end with `csi_data: Vec<i8, 612>`.
 
 use crate::data::CsiData;
 use crate::protocol::info::ChipFamily;
@@ -46,12 +46,15 @@ pub enum RxCsiFmtWire {
     SecaHtBw20Stbc = 10,
     SecaHtBw40 = 11,
     SecaHtBw40Stbc = 12,
-    // C5/C6 (esp-csi-rs 0.8.0) added these HE/VHT formats; the
+    // C5/C6 (esp-csi-rs 0.8.0) added the formats at 13..=15; the
     // discriminants must match `esp_csi_rs::csi::RxCSIFmt` exactly or
     // postcard rejects the enum during decode and the packet is dropped.
     VhtBw20 = 13,
-    He20Su = 14,
-    He20Mu = 15,
+    /// Held by formats this build does not name. Kept so the ordinals stay
+    /// aligned with the firmware and a packet carrying one still decodes.
+    Reserved14 = 14,
+    /// See [`Self::Reserved14`].
+    Reserved15 = 15,
     Undefined = 16,
 }
 
@@ -121,11 +124,11 @@ impl From<CsiPacketClassic> for CsiData {
     }
 }
 
-/// ESP32-C5 `CSIDataPacket` mirror. See the firmware's HE-chip
+/// ESP32-C5 `CSIDataPacket` mirror. See the firmware.s ESP32-C5/C6
 /// `CSIDataPacket` for field semantics.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(missing_docs)]
-pub struct CsiPacketHeC5 {
+pub struct CsiPacketC5 {
     pub mac: [u8; 6],
     pub rssi: i32,
     pub timestamp: u32,
@@ -151,12 +154,12 @@ pub struct CsiPacketHeC5 {
     pub csi_data: Vec<i8>,
 }
 
-/// ESP32-C6 `CSIDataPacket` mirror — adds `he_sigb_len` +
+/// ESP32-C6 `CSIDataPacket` mirror — adds `sigb_len` +
 /// `cur_single_mpdu` after `dump_len`, and `rxmatch0` after
 /// `rxmatch1`, on top of the C5 layout.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(missing_docs)]
-pub struct CsiPacketHeC6 {
+pub struct CsiPacketC6 {
     pub mac: [u8; 6],
     pub rssi: i32,
     pub timestamp: u32,
@@ -165,7 +168,7 @@ pub struct CsiPacketHeC6 {
     pub sig_len: u32,
     pub rx_state: u32,
     pub dump_len: u32,
-    pub he_sigb_len: u32,
+    pub sigb_len: u32,
     pub cur_single_mpdu: u32,
     pub cur_bb_format: u32,
     pub rx_channel_estimate_info_vld: u32,
@@ -185,11 +188,11 @@ pub struct CsiPacketHeC6 {
     pub csi_data: Vec<i8>,
 }
 
-// Each argument is one decoded wire field shared by the HE-C5 and HE-C6
+// Each argument is one decoded wire field shared by the ESP32-C5 and ESP32-C6
 // packet layouts; grouping them into a struct would just duplicate those
 // wire structs, so the flat signature is intentional.
 #[allow(clippy::too_many_arguments)]
-fn he_to_csidata(
+fn c5c6_to_csidata(
     header: ([u8; 6], i32, u32, i32, u32, u32, u32, u32),
     csi_data_len: u16,
     csi_data: Vec<i8>,
@@ -211,9 +214,9 @@ fn he_to_csidata(
     }
 }
 
-impl From<CsiPacketHeC5> for CsiData {
-    fn from(w: CsiPacketHeC5) -> Self {
-        he_to_csidata(
+impl From<CsiPacketC5> for CsiData {
+    fn from(w: CsiPacketC5) -> Self {
+        c5c6_to_csidata(
             (
                 w.mac,
                 w.rssi,
@@ -230,9 +233,9 @@ impl From<CsiPacketHeC5> for CsiData {
     }
 }
 
-impl From<CsiPacketHeC6> for CsiData {
-    fn from(w: CsiPacketHeC6) -> Self {
-        he_to_csidata(
+impl From<CsiPacketC6> for CsiData {
+    fn from(w: CsiPacketC6) -> Self {
+        c5c6_to_csidata(
             (
                 w.mac,
                 w.rssi,
@@ -266,11 +269,11 @@ pub fn decode_cobs_packet(frame: &[u8], chip: ChipFamily) -> Option<CsiData> {
     let mut owned = frame.to_vec();
     let decoded = match chip {
         ChipFamily::Esp32C5 => {
-            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketHeC5>(&mut owned).ok()?;
+            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketC5>(&mut owned).ok()?;
             p.into()
         }
         ChipFamily::Esp32C6 => {
-            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketHeC6>(&mut owned).ok()?;
+            let (p, _) = postcard::take_from_bytes_cobs::<CsiPacketC6>(&mut owned).ok()?;
             p.into()
         }
         _ => {
@@ -375,13 +378,13 @@ mod tests {
         assert_eq!(pkt.csi_raw_data, vec![5, -6]);
     }
 
-    /// Locks in the `RxCsiFmtWire` fix: a C6 packet whose `data_format` is
-    /// one of the HE/VHT values added in esp-csi-rs 0.8.0 (`He20Su` = 14)
-    /// must postcard-roundtrip. Before the enum was extended, discriminant
-    /// 14 didn't exist and the packet would fail to decode.
+    /// Locks in the `RxCsiFmtWire` fix: a C6 packet whose `data_format` is one
+    /// of the values added in esp-csi-rs 0.8.0 (discriminant 14) must
+    /// postcard-roundtrip. Before the enum was extended, 14 didn't exist and
+    /// the packet would fail to decode.
     #[test]
-    fn c6_he20su_data_format_round_trips() {
-        let packet = CsiPacketHeC6 {
+    fn c6_reserved_data_format_round_trips() {
+        let packet = CsiPacketC6 {
             mac: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
             rssi: -48,
             timestamp: 55_555,
@@ -390,7 +393,7 @@ mod tests {
             sig_len: 200,
             rx_state: 0,
             dump_len: 64,
-            he_sigb_len: 0,
+            sigb_len: 0,
             cur_single_mpdu: 1,
             cur_bb_format: 3,
             rx_channel_estimate_info_vld: 1,
@@ -406,19 +409,19 @@ mod tests {
             date_time: None,
             sequence_number: 9,
             csi_data_len: 3,
-            data_format: RxCsiFmtWire::He20Su,
+            data_format: RxCsiFmtWire::Reserved14,
             csi_data: vec![7, -8, 9],
         };
         // Struct-level roundtrip proves the new discriminant (de)serializes.
         let payload = postcard::to_allocvec(&packet).unwrap();
-        let decoded: CsiPacketHeC6 = postcard::from_bytes(&payload).unwrap();
-        assert_eq!(decoded.data_format, RxCsiFmtWire::He20Su);
+        let decoded: CsiPacketC6 = postcard::from_bytes(&payload).unwrap();
+        assert_eq!(decoded.data_format, RxCsiFmtWire::Reserved14);
 
         // And through the full COBS wire path used by the reader.
         let mut buf = vec![0u8; 1024];
         let cobs = postcard::to_slice_cobs(&packet, &mut buf).unwrap();
         let body = cobs.strip_suffix(&[0]).unwrap_or(cobs);
-        let pkt = decode_cobs_packet(body, ChipFamily::Esp32C6).expect("C6 HE20-SU decode");
+        let pkt = decode_cobs_packet(body, ChipFamily::Esp32C6).expect("C6 reserved-format decode");
         assert_eq!(pkt.mac, "11:22:33:44:55:66");
         assert_eq!(pkt.channel, 149);
         assert_eq!(pkt.csi_raw_data, vec![7, -8, 9]);

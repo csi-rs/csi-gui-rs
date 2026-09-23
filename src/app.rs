@@ -1835,7 +1835,7 @@ impl App {
         };
         let pane_count = self.tiling.pane_count();
         egui::Frame::default()
-            .stroke(egui::Stroke::new(if focused { 2.0 } else { 1.0 }, border_color))
+            .stroke(egui::Stroke::new(if focused { 2.0_f32 } else { 1.0_f32 }, border_color))
             .inner_margin(egui::Margin::same(6))
             .show(ui, |ui| {
                 let resp = ui.interact(

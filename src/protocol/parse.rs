@@ -234,11 +234,12 @@ fn apply_kv(c: &mut CsiData, k: &str, v: &str) {
             }
         }
         // ESP32-C5/C6 metadata block — absorbed so the parser does not lose
-        // framing on HE-chip output. None of these map onto `CsiData` today,
-        // but consuming them by name beats the safety-valve reset firing
-        // after 64 unrecognised lines.
+        // framing on ESP32-C5/C6 output. None of these map onto `CsiData` today;
+        // they are listed by name to document the block. Older firmware spelled
+        // the SIG-B length key with a prefix; like any other unmodelled key it
+        // lands in the catch-all below, so both spellings parse.
         "dump_len"
-        | "he_sigb_len"
+        | "sigb_len"
         | "cur_single_mpdu"
         | "cur_bb_format"
         | "rx_channel_estimate_info_vld"
@@ -267,7 +268,7 @@ fn apply_kv(c: &mut CsiData, k: &str, v: &str) {
 /// ```
 ///
 /// ESP32-C5 (21 scalars) and ESP32-C6 (24 scalars) substitute the
-/// classic 802.11n metadata block with the HE block (`dump_len`,
+/// classic 802.11n metadata block with the C5/C6 block (`dump_len`,
 /// `cur_bb_format`, `rxmatch*`, …). `sequence_number` is the first
 /// scalar in every variant; the duplicated `sig_len` and `csi_data_len`
 /// are always the last two scalars before the inner CSI array.
@@ -308,12 +309,12 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
     // Detect layout. Prefer chip hint; otherwise rely on scalar count.
     let layout = match chip {
         ChipFamily::Esp32 | ChipFamily::Esp32C3 | ChipFamily::Esp32S3 => ArrayLayout::Classic,
-        ChipFamily::Esp32C5 => ArrayLayout::HeC5,
-        ChipFamily::Esp32C6 => ArrayLayout::HeC6,
+        ChipFamily::Esp32C5 => ArrayLayout::C5,
+        ChipFamily::Esp32C6 => ArrayLayout::C6,
         ChipFamily::Unknown => match scalars.len() {
             22 => ArrayLayout::Classic,
-            21 => ArrayLayout::HeC5,
-            24 => ArrayLayout::HeC6,
+            21 => ArrayLayout::C5,
+            24 => ArrayLayout::C6,
             _ => ArrayLayout::Classic,
         },
     };
@@ -349,17 +350,17 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
             // 20 is the duplicated sig_len; 21 is csi_data_len.
             c.data_length = g_u(21) as u32;
         }
-        ArrayLayout::HeC5 => {
+        ArrayLayout::C5 => {
             // 8 dump_len, 9 cur_bb_format, 10 rx_channel_estimate_info_vld,
-            // 11 rx_channel_estimate_len, 12 second, 13 channel(HE), 14 is_group,
+            // 11 rx_channel_estimate_len, 12 second, 13 channel(C5/C6), 14 is_group,
             // 15 rxend_state, 16 rxmatch3, 17 rxmatch2, 18 rxmatch1,
             // 19 sig_len (dup), 20 csi_data_len.
             c.data_length = g_u(20) as u32;
         }
-        ArrayLayout::HeC6 => {
-            // 8 dump_len, 9 he_sigb_len, 10 cur_single_mpdu,
+        ArrayLayout::C6 => {
+            // 8 dump_len, 9 sigb_len, 10 cur_single_mpdu,
             // 11 cur_bb_format, 12 rx_channel_estimate_info_vld,
-            // 13 rx_channel_estimate_len, 14 second, 15 channel(HE), 16 is_group,
+            // 13 rx_channel_estimate_len, 14 second, 15 channel(C5/C6), 16 is_group,
             // 17 rxend_state, 18 rxmatch3, 19 rxmatch2, 20 rxmatch1,
             // 21 rxmatch0, 22 sig_len (dup), 23 csi_data_len.
             c.data_length = g_u(23) as u32;
@@ -372,8 +373,8 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
 #[derive(Copy, Clone, Debug)]
 enum ArrayLayout {
     Classic,
-    HeC5,
-    HeC6,
+    C5,
+    C6,
 }
 
 /// 26-column CSV per packet (Hernandez ESP32-CSI-Tool). Last column is the
@@ -491,8 +492,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_array_list_he_c5_layout() {
-        // C5: 21 scalars (no he_sigb_len, no cur_single_mpdu, no rxmatch0).
+    fn parses_array_list_c5_layout() {
+        // C5: 21 scalars (no sigb_len, no cur_single_mpdu, no rxmatch0).
         let line = "[100,-60,11,-95,36,12345,256,0,512,0,0,0,5,36,0,0,1,2,3,256,4,[10,20,30,40]]";
         let pkt = parse_array_list(line, ChipFamily::Esp32C5).expect("c5");
         assert_eq!(pkt.rssi, -60);
@@ -504,8 +505,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_array_list_he_c6_layout() {
-        // C6: 24 scalars (extra he_sigb_len + cur_single_mpdu + rxmatch0).
+    fn parses_array_list_c6_layout() {
+        // C6: 24 scalars (extra sigb_len + cur_single_mpdu + rxmatch0).
         let line = "[7,-70,13,-92,40,99,512,0,1024,8,1,0,0,0,7,40,1,0,1,2,3,4,512,6,[1,2,3,4,5,6]]";
         let pkt = parse_array_list(line, ChipFamily::Esp32C6).expect("c6");
         assert_eq!(pkt.rssi, -70);
@@ -549,7 +550,7 @@ mod tests {
 
     #[test]
     fn text_absorbs_c5_c6_metadata_block() {
-        // ESP32-C5/C6 emit the HE metadata block instead of 802.11n fields.
+        // ESP32-C5/C6 emit their own metadata block instead of 802.11n fields.
         // Unknown keys are ignored without resetting the parser.
         let mut p = TextParser::default();
         let lines = [
