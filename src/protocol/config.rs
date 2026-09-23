@@ -503,22 +503,15 @@ pub struct EspConfig {
     /// Classic chips: LTF merging (`--ltf-merge=on|off`).
     pub classic_ltf_merge_en: bool,
 
-    // The `alias`es on the five `c5c6_*` fields below keep configs saved
-    // before 1.1.0, which used an older prefix, loading.
     /// ESP32-C5/C6: master CSI acquisition switch (`set-csi --csi=on|off`).
-    #[serde(alias = "he_csi_en")]
     pub c5c6_csi_en: bool,
     /// ESP32-C5/C6: L-LTF on 11g PPDU (`--csi-legacy=on|off`).
-    #[serde(alias = "he_csi_legacy_en")]
     pub c5c6_csi_legacy_en: bool,
     /// ESP32-C5/C6: HT-LTF on HT20 PPDU (`--csi-ht20=on|off`).
-    #[serde(alias = "he_csi_ht20_en")]
     pub c5c6_csi_ht20_en: bool,
     /// ESP32-C5/C6: HT-LTF on HT40 PPDU (`--csi-ht40=on|off`).
-    #[serde(alias = "he_csi_ht40_en")]
     pub c5c6_csi_ht40_en: bool,
     /// ESP32-C5/C6: value-scale config 0..=3 (`--val-scale-cfg=…`).
-    #[serde(alias = "he_val_scale_cfg")]
     pub c5c6_val_scale_cfg: u32,
     /// Named acquisition preset (`--preset=…`). `None` emits the individual
     /// flags instead. Names are resolved by the installed
@@ -704,46 +697,22 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
 mod tests {
     use super::*;
 
-    /// A config saved by an older release uses the previous field names and
-    /// may carry a PHY protocol this build no longer offers. It must still
-    /// load, with the old values carried over and the protocol falling back
-    /// to the default.
+    /// A config written by another build may name a PHY protocol this build
+    /// does not offer, and may predate the collection field. It must still
+    /// load, falling back to the defaults for both.
     #[test]
-    fn old_saved_config_loads_through_aliases() {
+    fn unknown_protocol_and_missing_collection_fall_back() {
         let mut v = serde_json::to_value(EspConfig::default()).unwrap();
         let obj = v.as_object_mut().unwrap();
-        for new in [
-            "c5c6_csi_en",
-            "c5c6_csi_legacy_en",
-            "c5c6_csi_ht20_en",
-            "c5c6_csi_ht40_en",
-            "c5c6_val_scale_cfg",
-            "collection",
-        ] {
-            obj.remove(new).unwrap();
-        }
-        // The pre-1.1.0 field names, which the `serde(alias)`es accept.
-        obj.insert("he_csi_en".into(), false.into());
-        obj.insert("he_csi_legacy_en".into(), false.into());
-        obj.insert("he_csi_ht20_en".into(), true.into());
-        obj.insert("he_csi_ht40_en".into(), false.into());
-        obj.insert("he_val_scale_cfg".into(), 1.into());
-        // A protocol variant removed in 1.1.0 (the firmware never accepted it).
-        obj.insert("protocol".into(), "Ax".into());
+        obj.remove("collection").unwrap();
+        obj.insert("protocol".into(), "not-a-protocol".into());
 
         let cfg: EspConfig = serde_json::from_value(v).unwrap();
-        assert!(!cfg.c5c6_csi_en);
-        assert!(!cfg.c5c6_csi_legacy_en);
-        assert!(cfg.c5c6_csi_ht20_en);
-        assert!(!cfg.c5c6_csi_ht40_en);
-        assert_eq!(cfg.c5c6_val_scale_cfg, 1);
         assert_eq!(cfg.protocol, WifiProtocol::Lr);
         assert_eq!(cfg.collection, CollectionMode::Collector);
 
-        // And the current names round-trip unchanged.
         let json = serde_json::to_string(&cfg).unwrap();
         let back: EspConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.c5c6_val_scale_cfg, 1);
         assert_eq!(back.protocol, WifiProtocol::Lr);
     }
 
