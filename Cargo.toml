@@ -6,6 +6,7 @@ rust-version = "1.85"
 description = "Desktop GUI for live Wi-Fi CSI capture from ESP32 boards running esp-csi-cli-rs"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/csi-rs/csi-gui-rs"
+documentation = "https://docs.rs/csi-gui-rs"
 readme = "README.md"
 keywords = ["csi", "esp32", "wifi", "egui", "visualization"]
 categories = ["visualization", "embedded", "hardware-support"]
@@ -24,6 +25,10 @@ exclude = [
 [features]
 default = []
 rerun = ["dep:rerun"]
+
+[package.metadata.docs.rs]
+# Document the optional Rerun sink too.
+all-features = true
 
 [dependencies]
 eframe = { version = "0.34.2", default-features = false, features = [
