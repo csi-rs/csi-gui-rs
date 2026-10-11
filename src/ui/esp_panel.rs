@@ -1,5 +1,5 @@
 use crate::protocol::config::{
-    CollectionMode, CsiDelivery, EspConfig, Ht40, LogMode, PhyRate, WifiMode, WifiProtocol, ESP_CONFIG_FIELDS,
+    CsiDelivery, EspConfig, Ht40, LogMode, PhyRate, Reporting, WifiMode, WifiProtocol, ESP_CONFIG_FIELDS,
     valid_channel,
 };
 use crate::protocol::profile::active_profile;
@@ -7,7 +7,7 @@ use crate::shared::EspSharedState;
 
 /// Persistent edit buffers for numeric ESP config fields (see `channel_text`).
 pub struct ConfigFieldBuffers {
-    pub traffic_hz: String,
+    pub periodicity_hz: String,
     pub c5c6_val_scale_cfg: String,
     pub start_duration: String,
 }
@@ -15,7 +15,7 @@ pub struct ConfigFieldBuffers {
 impl ConfigFieldBuffers {
     pub fn from_cfg(cfg: &EspConfig) -> Self {
         Self {
-            traffic_hz: cfg.traffic_hz.to_string(),
+            periodicity_hz: cfg.periodicity_hz.to_string(),
             c5c6_val_scale_cfg: cfg.c5c6_val_scale_cfg.to_string(),
             start_duration: cfg
                 .start_duration_sec
@@ -40,8 +40,8 @@ impl Default for EspPanel {
 /// Render the scrollable grid of the `set-*` config knobs for one device's
 /// `cfg` into the given `ui`.
 ///
-/// Mode-specific fields (STA / AP credentials, peer MAC, HT40, collection
-/// mode) are greyed out when the selected [`WifiMode`] doesn't use them, so the
+/// Mode-specific fields (STA / AP credentials, peer MAC, HT40,
+/// reporting) are greyed out when the selected [`WifiMode`] doesn't use them, so the
 /// panel only invites edits that will actually take effect. `channel_buf` and
 /// `field_bufs` are the session's persistent edit buffers.
 pub fn config_grid(
@@ -113,8 +113,8 @@ fn field_enabled(idx: usize, mode: WifiMode) -> bool {
         8 => mode.uses_peer_mac(),
         // HT40 — the softAP's secondary channel, the ESP-NOW per-peer TX PHY.
         9 => mode.uses_ht40(),
-        // Collection mode — only where the mode admits a choice.
-        10 => mode.admits_collection_choice(),
+        // Reporting — only where the mode admits a choice.
+        10 => mode.admits_reporting_choice(),
         _ => true,
     }
 }
@@ -126,8 +126,8 @@ fn commit_channel(cfg: &mut EspConfig, buf: &str) {
 }
 
 fn commit_numeric_fields(cfg: &mut EspConfig, bufs: &ConfigFieldBuffers) {
-    if let Ok(v) = bufs.traffic_hz.trim().parse::<u64>() {
-        cfg.traffic_hz = v;
+    if let Ok(v) = bufs.periodicity_hz.trim().parse::<u64>() {
+        cfg.periodicity_hz = v;
     }
     if let Ok(v) = bufs.c5c6_val_scale_cfg.trim().parse::<u32>() {
         if v <= 3 {
@@ -245,27 +245,27 @@ fn render_value(
         10 => {
             enum_combo(
                 ui,
-                "collection",
-                &mut cfg.collection,
-                &CollectionMode::ALL.map(|m| (m, m.cli())),
+                "reporting",
+                &mut cfg.reporting,
+                &Reporting::ALL.map(|m| (m, m.cli())),
                 shared,
             );
         }
         11 => {
             if ui
                 .add(
-                    egui::TextEdit::singleline(&mut field_bufs.traffic_hz)
+                    egui::TextEdit::singleline(&mut field_bufs.periodicity_hz)
                         .desired_width(100.0),
                 )
                 .changed()
             {
                 shared.mark_config_dirty();
-                if let Ok(v) = field_bufs.traffic_hz.trim().parse::<u64>() {
-                    cfg.traffic_hz = v;
+                if let Ok(v) = field_bufs.periodicity_hz.trim().parse::<u64>() {
+                    cfg.periodicity_hz = v;
                 }
             }
         }
-        12 => toggle(ui, &mut cfg.traffic_unsolicited, shared),
+        12 => toggle(ui, &mut cfg.unsolicited, shared),
         13 => toggle(ui, &mut cfg.csi_output, shared),
         14 => {
             let selected = format!(

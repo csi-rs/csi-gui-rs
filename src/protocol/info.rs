@@ -100,8 +100,11 @@ impl Default for DeviceInfo {
 /// Wire-protocol version this build of the GUI understands. Compared
 /// against [`DeviceInfo::protocol`] in [`DeviceInfo::protocol_supported`].
 /// Bumped 1 → 2 for esp-csi-cli-rs v0.6.0+ (adds the `mac=` info line and
-/// the v0.7.x command surface).
-pub const SUPPORTED_PROTOCOL: u32 = 2;
+/// the v0.7.x command surface); 2 → 4 for esp-csi-cli-rs v0.10.0+ (the
+/// IEEE 802.11bf vocabulary: `esp-now-initiator`/`-responder` and
+/// `esp-now-simplex-*` mode tokens, `set-wifi --reporting`,
+/// `set-measurement --periodicity-hz`).
+pub const SUPPORTED_PROTOCOL: u32 = 4;
 
 impl DeviceInfo {
     /// Parse `key=value` lines emitted between the banner and `END-INFO`.

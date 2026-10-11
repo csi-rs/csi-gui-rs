@@ -1,5 +1,18 @@
 # Release Notes
 
+## 1.2.0
+
+Needs esp-csi-cli-rs 0.10.0 or later (`info` reports `protocol=4`). Older
+firmware is refused at identify with an "unsupported protocol" dialog.
+
+### Changed (breaking)
+
+- **IEEE 802.11bf vocabulary** — The firmware CLI and this GUI now use the 802.11bf names. Hard cut; the old tokens are no longer sent or accepted.
+  - Mode tokens: `esp-now-central` → `esp-now-initiator`, `esp-now-peripheral` → `esp-now-responder`, `esp-now-fast-source` → `esp-now-simplex-source`, `esp-now-fast-collector` → `esp-now-simplex-peer`. `WifiMode::EspNowCentral` / `EspNowPeripheral` are now `EspNowInitiator` / `EspNowResponder`.
+  - `set-wifi --collection=collector|listener` → `set-wifi --reporting=report|none`. `CollectionMode` is now `Reporting` (`Report`, `None`), `EspConfig::collection` is `EspConfig::reporting`, and `WifiMode::admits_collection_choice` is `admits_reporting_choice`. The panel row reads **Reporting**.
+  - `set-traffic --frequency-hz=N` → `set-measurement --periodicity-hz=N` (`--unsolicited=on|off` unchanged). `EspConfig::traffic_hz` / `traffic_unsolicited` are `periodicity_hz` / `unsolicited`; the panel rows read **Periodicity (Hz)** and **Unsolicited**.
+  - `SUPPORTED_PROTOCOL` is 4.
+
 ## 1.1.0
 
 Needs esp-csi-cli-rs 0.8.0 or later. This release supersedes the mode, peer-MAC,

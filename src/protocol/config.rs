@@ -4,44 +4,47 @@
 //! cycle/serialize/render-as-CLI on demand. They are the GUI's
 //! source-of-truth for what gets pushed to the device with `ApplyConfig`.
 //!
-//! Grammar matches esp-csi-cli-rs v0.8.0 or later: `set-csi` flags are
+//! Grammar matches esp-csi-cli-rs v0.10.0 or later: `set-csi` flags are
 //! positive `on|off` toggles (not the old `--disable-*` booleans), and the
-//! surface includes AP mode, the emitter and ESP-NOW modes, the collection
-//! mode (`set-wifi --collection`), `set-protocol`, unsolicited traffic, `raw`
-//! CSI delivery, the CSI-output delivery gate, and C5-only toggles.
+//! surface includes AP mode, the emitter and ESP-NOW modes, the reporting
+//! setting (`set-wifi --reporting`), `set-protocol`, the measurement
+//! periodicity (`set-measurement`), `raw` CSI delivery, the CSI-output
+//! delivery gate, and C5-only toggles. Mode tokens and flag names follow the
+//! IEEE 802.11bf vocabulary of esp-csi-cli-rs 0.10.0 (CLI `protocol=4`).
 
 use serde::{Deserialize, Serialize};
 
-/// The node's **operational mode** — how it reaches the channel.
+/// The node's **mode** — how it reaches the channel.
 ///
-/// This is one of four independent attributes describing a node; the others (network role,
-/// collection mode, session role) are carried by the mode rather than selected here, because which
-/// values a mode admits depends on the mode. The model is documented once, in
+/// The other node attributes (session role, sensing role, reporting) are carried by the mode
+/// rather than selected here, because which values a mode admits depends on the mode. The model
+/// is documented once, in
 /// [`esp-csi-rs/docs/network-model.md`](https://github.com/csi-rs/esp-csi-rs/blob/main/docs/network-model.md).
 ///
-/// Where a mode admits a choice of collection mode, [`EspConfig::collection`] picks it; see
-/// [`WifiMode::admits_collection_choice`].
+/// Where a mode admits a choice of reporting, [`EspConfig::reporting`] picks it; see
+/// [`WifiMode::admits_reporting_choice`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WifiMode {
-    /// Wi-Fi station: associate to an AP using the configured SSID/password. Collector or
-    /// listener.
+    /// Wi-Fi station: associate to an AP using the configured SSID/password. Reports or not,
+    /// by choice.
     Station,
-    /// Wi-Fi sniffer: promiscuous capture without association. Always a collector.
+    /// Wi-Fi sniffer: promiscuous capture without association. Always reports.
     Sniffer,
-    /// Wi-Fi access point: self-contained softAP (DHCP + ICMP flood). Collector or listener.
+    /// Wi-Fi access point: self-contained softAP (DHCP + ICMP flood). Session initiator;
+    /// reports or not, by choice.
     WifiAp,
-    /// Emitter: raw-inject HT20 sounding frames. A central listener that captures nothing.
+    /// Emitter: raw-inject HT20 sounding frames. A transmitter that measures and reports nothing.
     Ht20Emitter,
-    /// Emitter: raw-inject HT40 sounding frames. A central listener that captures nothing.
+    /// Emitter: raw-inject HT40 sounding frames. A transmitter that measures and reports nothing.
     Ht40Emitter,
-    /// ESP-NOW, central end: originates the control traffic. Collector or listener.
-    EspNowCentral,
-    /// ESP-NOW, peripheral end: answers it. Collector or listener.
-    EspNowPeripheral,
-    /// ESP-NOW simplex, flooding end. A central listener — it reports no CSI of its own.
+    /// ESP-NOW, initiator end: starts the measurement exchange. Reports or not, by choice.
+    EspNowInitiator,
+    /// ESP-NOW, responder end: answers it. Reports or not, by choice.
+    EspNowResponder,
+    /// ESP-NOW simplex, flooding end. Initiator and transmitter; it reports no CSI of its own.
     EspNowSimplexSource,
-    /// ESP-NOW simplex, measuring end. A peripheral collector; the highest CSI rate of any
-    /// pairing.
+    /// ESP-NOW simplex, measuring end. Responder and receiver that reports; the highest CSI
+    /// rate of any pairing.
     EspNowSimplexPeer,
 }
 
@@ -52,8 +55,8 @@ impl WifiMode {
         WifiMode::WifiAp,
         WifiMode::Ht20Emitter,
         WifiMode::Ht40Emitter,
-        WifiMode::EspNowCentral,
-        WifiMode::EspNowPeripheral,
+        WifiMode::EspNowInitiator,
+        WifiMode::EspNowResponder,
         WifiMode::EspNowSimplexSource,
         WifiMode::EspNowSimplexPeer,
     ];
@@ -66,12 +69,10 @@ impl WifiMode {
             Self::WifiAp => "wifi-ap",
             Self::Ht20Emitter => "ht20-emitter",
             Self::Ht40Emitter => "ht40-emitter",
-            Self::EspNowCentral => "esp-now-central",
-            Self::EspNowPeripheral => "esp-now-peripheral",
-            // The firmware's own strings. It also accepts `esp-now-simplex-{source,peer}`;
-            // emitting the originals keeps older devices working.
-            Self::EspNowSimplexSource => "esp-now-fast-source",
-            Self::EspNowSimplexPeer => "esp-now-fast-collector",
+            Self::EspNowInitiator => "esp-now-initiator",
+            Self::EspNowResponder => "esp-now-responder",
+            Self::EspNowSimplexSource => "esp-now-simplex-source",
+            Self::EspNowSimplexPeer => "esp-now-simplex-peer",
         }
     }
     /// `true` for the emitter modes. They inject frames and capture nothing, so they take a
@@ -81,8 +82,8 @@ impl WifiMode {
     }
 
     /// `true` for the modes that report no CSI of their own — the emitters and the simplex source.
-    /// All three are central listeners: the emitters capture nothing, and the simplex source
-    /// captures but never reports, so there is no capture-side configuration to show.
+    /// All three have reporting fixed at `none`: the emitters measure nothing, and the simplex
+    /// source measures but never reports, so there is no capture-side configuration to show.
     pub fn reports_no_csi(self) -> bool {
         self.is_emitter() || matches!(self, Self::EspNowSimplexSource)
     }
@@ -91,21 +92,21 @@ impl WifiMode {
     pub fn is_esp_now(self) -> bool {
         matches!(
             self,
-            Self::EspNowCentral
-                | Self::EspNowPeripheral
+            Self::EspNowInitiator
+                | Self::EspNowResponder
                 | Self::EspNowSimplexSource
                 | Self::EspNowSimplexPeer
         )
     }
 
-    /// `true` for the modes whose collection mode is a choice rather than fixed by the mode:
-    /// station, access point and the ESP-NOW pair. Only these send `set-wifi --collection`;
-    /// the sniffer is always a collector, the emitters always listeners, and each simplex end is
-    /// fixed by which end it is.
-    pub fn admits_collection_choice(self) -> bool {
+    /// `true` for the modes whose reporting is a choice rather than fixed by the mode:
+    /// station, access point and the ESP-NOW pair. Only these send `set-wifi --reporting`;
+    /// the sniffer always reports, the emitters never do, and each simplex end is fixed by
+    /// which end it is.
+    pub fn admits_reporting_choice(self) -> bool {
         matches!(
             self,
-            Self::Station | Self::WifiAp | Self::EspNowCentral | Self::EspNowPeripheral
+            Self::Station | Self::WifiAp | Self::EspNowInitiator | Self::EspNowResponder
         )
     }
 
@@ -120,14 +121,14 @@ impl WifiMode {
     pub fn uses_ht40(self) -> bool {
         matches!(
             self,
-            Self::WifiAp | Self::EspNowCentral | Self::EspNowPeripheral | Self::EspNowSimplexSource
+            Self::WifiAp | Self::EspNowInitiator | Self::EspNowResponder | Self::EspNowSimplexSource
         )
     }
 
     /// `true` for the modes that apply `set-rate`: the ESP-NOW pair. Everywhere else the rate is
     /// reporting only.
     pub fn applies_phy_rate(self) -> bool {
-        matches!(self, Self::EspNowCentral | Self::EspNowPeripheral)
+        matches!(self, Self::EspNowInitiator | Self::EspNowResponder)
     }
     /// Round-robin to the next mode (used by the config panel's
     /// click-to-cycle button). Every variant must appear exactly once or
@@ -138,9 +139,9 @@ impl WifiMode {
             Self::Station => Self::WifiAp,
             Self::WifiAp => Self::Ht20Emitter,
             Self::Ht20Emitter => Self::Ht40Emitter,
-            Self::Ht40Emitter => Self::EspNowCentral,
-            Self::EspNowCentral => Self::EspNowPeripheral,
-            Self::EspNowPeripheral => Self::EspNowSimplexSource,
+            Self::Ht40Emitter => Self::EspNowInitiator,
+            Self::EspNowInitiator => Self::EspNowResponder,
+            Self::EspNowResponder => Self::EspNowSimplexSource,
             Self::EspNowSimplexSource => Self::EspNowSimplexPeer,
             Self::EspNowSimplexPeer => Self::Sniffer,
         }
@@ -243,30 +244,30 @@ impl Ht40 {
     }
 }
 
-/// The node's **collection mode** (`set-wifi --collection=…`): whether the
-/// CSI it captures leaves the node. A collector reports it; a listener
-/// captures but does not report.
+/// The node's **reporting** setting (`set-wifi --reporting=…`): whether the
+/// CSI it measures is reported to the host. `report` sends it; `none`
+/// measures but reports nothing.
 ///
 /// Only read by the modes that admit a choice
-/// ([`WifiMode::admits_collection_choice`]); every other mode fixes it.
-/// Needs esp-csi-cli-rs 0.8.0 or later.
+/// ([`WifiMode::admits_reporting_choice`]); every other mode fixes it.
+/// Needs esp-csi-cli-rs 0.10.0 or later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum CollectionMode {
-    /// Report captured CSI (the firmware default).
+pub enum Reporting {
+    /// Report measured CSI to the host (the firmware default).
     #[default]
-    Collector,
-    /// Capture, but do not report.
-    Listener,
+    Report,
+    /// Measure, but report nothing.
+    None,
 }
 
-impl CollectionMode {
-    pub const ALL: [CollectionMode; 2] = [CollectionMode::Collector, CollectionMode::Listener];
+impl Reporting {
+    pub const ALL: [Reporting; 2] = [Reporting::Report, Reporting::None];
 
-    /// CLI token used by `set-wifi --collection=…`.
+    /// CLI token used by `set-wifi --reporting=…`.
     pub fn cli(self) -> &'static str {
         match self {
-            Self::Collector => "collector",
-            Self::Listener => "listener",
+            Self::Report => "report",
+            Self::None => "none",
         }
     }
 }
@@ -381,7 +382,7 @@ impl CsiDelivery {
 
 /// PHY rate the firmware uses when transmitting (`set-rate --rate=…`).
 /// Reporting only (stored and echoed by `show-config`), except on the ESP-NOW
-/// pair (`esp-now-central` / `esp-now-peripheral`), which applies it. See
+/// pair (`esp-now-initiator` / `esp-now-responder`), which applies it. See
 /// [`WifiMode::applies_phy_rate`].
 ///
 /// `RxxL` variants are 802.11b long-preamble; `Mcs*Lgi` / `Mcs*Sgi` are
@@ -439,12 +440,12 @@ impl PhyRate {
 /// to `true` (the firmware default is "all CSI features on").
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EspConfig {
-    /// Operational mode (`set-wifi --mode=…`).
+    /// Mode (`set-wifi --mode=…`).
     pub wifi_mode: WifiMode,
-    /// Collection mode (`set-wifi --collection=…`). Sent only for the modes
-    /// that admit a choice; see [`WifiMode::admits_collection_choice`].
+    /// Reporting (`set-wifi --reporting=…`). Sent only for the modes
+    /// that admit a choice; see [`WifiMode::admits_reporting_choice`].
     #[serde(default)]
-    pub collection: CollectionMode,
+    pub reporting: Reporting,
     /// Wi-Fi PHY protocol (`set-protocol --protocol=…`).
     pub protocol: WifiProtocol,
     /// Primary channel (`set-wifi --set-channel=…`). Must satisfy
@@ -471,14 +472,14 @@ pub struct EspConfig {
     /// [`WifiMode::uses_ht40`].
     #[serde(default)]
     pub ht40: Ht40,
-    /// Traffic-generator frequency in Hz (`set-traffic --frequency-hz=…`).
-    pub traffic_hz: u64,
-    /// One-directional unsolicited ICMP-reply flood (`set-traffic --unsolicited=…`).
-    pub traffic_unsolicited: bool,
+    /// Measurement periodicity in Hz (`set-measurement --periodicity-hz=…`).
+    pub periodicity_hz: u64,
+    /// One-directional unsolicited ICMP-reply flood (`set-measurement --unsolicited=…`).
+    pub unsolicited: bool,
     /// Runtime CSI delivery gate (`set-csi-output --enabled=…`). With it off
     /// the radio still captures — nothing is decoded or logged — so the RX
-    /// path keeps its timing. This is not the collection mode; see
-    /// [`EspConfig::collection`]. No effect on an emitter, which captures nothing.
+    /// path keeps its timing. This is not the reporting setting; see
+    /// [`EspConfig::reporting`]. No effect on an emitter, which captures nothing.
     pub csi_output: bool,
     /// Wire format for emitted CSI packets (`set-log-mode`).
     pub log_mode: LogMode,
@@ -535,7 +536,7 @@ impl Default for EspConfig {
     fn default() -> Self {
         Self {
             wifi_mode: WifiMode::Sniffer,
-            collection: CollectionMode::Collector,
+            reporting: Reporting::Report,
             protocol: WifiProtocol::Lr,
             channel: 6,
             sta_ssid: String::new(),
@@ -545,8 +546,8 @@ impl Default for EspConfig {
             ap_dhcp: true,
             peer_mac: String::new(),
             ht40: Ht40::None,
-            traffic_hz: 100,
-            traffic_unsolicited: false,
+            periodicity_hz: 100,
+            unsolicited: false,
             csi_output: true,
             log_mode: LogMode::Serialized,
             phy_rate: PhyRate::Mcs0Lgi,
@@ -667,9 +668,9 @@ pub const ESP_CONFIG_FIELDS: &[&str] = &[
     "AP DHCP",
     "Peer MAC (emitter / ESP-NOW)",
     "HT40 (AP / ESP-NOW)",
-    "Collection mode",
-    "Traffic Hz",
-    "Traffic Unsolicited",
+    "Reporting",
+    "Periodicity (Hz)",
+    "Unsolicited",
     "CSI Output",
     "Log Mode",
     "PHY Rate",
@@ -698,18 +699,18 @@ mod tests {
     use super::*;
 
     /// A config written by another build may name a PHY protocol this build
-    /// does not offer, and may predate the collection field. It must still
+    /// does not offer, and may predate the reporting field. It must still
     /// load, falling back to the defaults for both.
     #[test]
-    fn unknown_protocol_and_missing_collection_fall_back() {
+    fn unknown_protocol_and_missing_reporting_fall_back() {
         let mut v = serde_json::to_value(EspConfig::default()).unwrap();
         let obj = v.as_object_mut().unwrap();
-        obj.remove("collection").unwrap();
+        obj.remove("reporting").unwrap();
         obj.insert("protocol".into(), "not-a-protocol".into());
 
         let cfg: EspConfig = serde_json::from_value(v).unwrap();
         assert_eq!(cfg.protocol, WifiProtocol::Lr);
-        assert_eq!(cfg.collection, CollectionMode::Collector);
+        assert_eq!(cfg.reporting, Reporting::Report);
 
         let json = serde_json::to_string(&cfg).unwrap();
         let back: EspConfig = serde_json::from_str(&json).unwrap();
