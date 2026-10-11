@@ -81,17 +81,17 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     if cfg.wifi_mode.uses_ht40() {
         out.push(format!("set-wifi --ht40={}", cfg.ht40.cli()));
     }
-    // The collection mode is only read by the modes that admit a choice; the
-    // rest fix it, so it is not sent there.
-    if cfg.wifi_mode.admits_collection_choice() {
-        out.push(format!("set-wifi --collection={}", cfg.collection.cli()));
+    // Reporting is only read by the modes that admit a choice; the rest fix
+    // it, so it is not sent there.
+    if cfg.wifi_mode.admits_reporting_choice() {
+        out.push(format!("set-wifi --reporting={}", cfg.reporting.cli()));
     }
 
     out.push(format!("set-protocol --protocol={}", cfg.protocol.cli()));
     out.push(format!(
-        "set-traffic --frequency-hz={} --unsolicited={}",
-        cfg.traffic_hz,
-        on_off(cfg.traffic_unsolicited)
+        "set-measurement --periodicity-hz={} --unsolicited={}",
+        cfg.periodicity_hz,
+        on_off(cfg.unsolicited)
     ));
     out.push(format!("set-csi-output --enabled={}", cfg.csi_output));
     out.push(format!("set-rate --rate={}", cfg.phy_rate.cli()));
@@ -188,7 +188,7 @@ fn quote_for_wire(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::config::{CollectionMode, CsiDelivery, Ht40};
+    use crate::protocol::config::{CsiDelivery, Ht40, Reporting};
     use crate::protocol::profile::{install_profile, CsiProfile};
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn collector_modes_omit_destination_mac() {
+    fn receive_only_modes_omit_destination_mac() {
         let cfg = EspConfig {
             wifi_mode: WifiMode::Sniffer,
             peer_mac: "aa:bb:cc:dd:ee:ff".into(),
@@ -242,22 +242,22 @@ mod tests {
     }
 
     #[test]
-    fn collection_mode_sent_only_where_admitted() {
+    fn reporting_sent_only_where_admitted() {
         for mode in [
             WifiMode::Station,
             WifiMode::WifiAp,
-            WifiMode::EspNowCentral,
-            WifiMode::EspNowPeripheral,
+            WifiMode::EspNowInitiator,
+            WifiMode::EspNowResponder,
         ] {
             let cfg = EspConfig {
                 wifi_mode: mode,
-                collection: CollectionMode::Listener,
+                reporting: Reporting::None,
                 ..Default::default()
             };
             let lines = render_apply_config(&cfg, ChipFamily::Esp32);
             assert!(
-                lines.contains(&"set-wifi --collection=listener".to_string()),
-                "{mode:?} should send --collection"
+                lines.contains(&"set-wifi --reporting=none".to_string()),
+                "{mode:?} should send --reporting"
             );
         }
         for mode in [
@@ -269,13 +269,13 @@ mod tests {
         ] {
             let cfg = EspConfig {
                 wifi_mode: mode,
-                collection: CollectionMode::Listener,
+                reporting: Reporting::None,
                 ..Default::default()
             };
             let lines = render_apply_config(&cfg, ChipFamily::Esp32);
             assert!(
-                !lines.iter().any(|l| l.contains("--collection")),
-                "{mode:?} fixes its collection mode"
+                !lines.iter().any(|l| l.contains("--reporting")),
+                "{mode:?} fixes its reporting"
             );
         }
     }
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn esp_now_pair_emits_peer_mac_and_ht40() {
         let cfg = EspConfig {
-            wifi_mode: WifiMode::EspNowPeripheral,
+            wifi_mode: WifiMode::EspNowResponder,
             peer_mac: "aa:bb:cc:dd:ee:ff".into(),
             ht40: Ht40::Below,
             ..Default::default()
@@ -291,7 +291,7 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
         assert!(lines.contains(&"set-wifi --ht40=below".to_string()));
-        assert!(lines.contains(&"set-wifi --collection=collector".to_string()));
+        assert!(lines.contains(&"set-wifi --reporting=report".to_string()));
     }
 
     #[test]
@@ -316,6 +316,35 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(lines.contains(&"set-csi-output --enabled=false".to_string()));
         assert!(!lines.iter().any(|l| l.starts_with("set-collection-mode")));
+    }
+
+    #[test]
+    fn measurement_uses_periodicity_hz() {
+        let cfg = EspConfig {
+            periodicity_hz: 250,
+            unsolicited: true,
+            ..Default::default()
+        };
+        let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+        assert!(lines.contains(&"set-measurement --periodicity-hz=250 --unsolicited=on".to_string()));
+        assert!(!lines.iter().any(|l| l.starts_with("set-traffic")));
+    }
+
+    #[test]
+    fn esp_now_modes_use_bf_tokens() {
+        for (mode, token) in [
+            (WifiMode::EspNowInitiator, "esp-now-initiator"),
+            (WifiMode::EspNowResponder, "esp-now-responder"),
+            (WifiMode::EspNowSimplexSource, "esp-now-simplex-source"),
+            (WifiMode::EspNowSimplexPeer, "esp-now-simplex-peer"),
+        ] {
+            let cfg = EspConfig {
+                wifi_mode: mode,
+                ..Default::default()
+            };
+            let lines = render_apply_config(&cfg, ChipFamily::Esp32);
+            assert!(lines.contains(&format!("set-wifi --mode={token}")));
+        }
     }
 
     #[test]

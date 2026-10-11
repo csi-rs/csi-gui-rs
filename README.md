@@ -33,7 +33,7 @@ It's the difference between *running an experiment* and *debugging your tooling*
 
 - **Auto-connect** to the first available serial port, with hardware DTR/RTS reset, banner identification, and graceful handling of hot-unplugs.
 - **Auto config sync** — on every connect the GUI's full `EspConfig` is pushed to the firmware, so the device's wire format (default `LogMode::Serialized`) matches what the host expects from the very first packet.
-- **Mode-aware device config panel** — the full `set-*` surface as typed dropdowns, toggles, and numeric fields. Rows that don't apply to the selected Wi-Fi mode are greyed out (STA/AP credentials, the peer MAC, HT40, the collection mode), and the channel field is hidden entirely in Station mode (the AP assigns it). See [Device configuration](#device-configuration).
+- **Mode-aware device config panel** — the full `set-*` surface as typed dropdowns, toggles, and numeric fields. Rows that don't apply to the selected Wi-Fi mode are greyed out (STA/AP credentials, the peer MAC, HT40, reporting), and the channel field is hidden entirely in Station mode (the AP assigns it). See [Device configuration](#device-configuration).
 - **All firmware log modes decode**: `text`, `array-list`, `serialized` (COBS-framed postcard — both classic-chip and ESP32-C5/C6 schemas), and `esp-csi-tool` (Hernandez 26-column CSV).
 - **Live visualizations** (any of which can be split into multiple tiles side-by-side; every pane carries a large `#N` id badge for keyboard focus shortcuts 1..9 / 0):
   - **Dashboard** — PPS, SNR, RSSI, firmware status at a glance.
@@ -68,7 +68,7 @@ It's the difference between *running an experiment* and *debugging your tooling*
 
 Prerequisites:
 - Rust ≥ 1.85 (stable), edition 2024.
-- An ESP32 (any variant — esp32, c3, c5, c6, s3) flashed with [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) 0.8.0 or later.
+- An ESP32 (any variant — esp32, c3, c5, c6, s3) flashed with [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) 0.10.0 or later (CLI `protocol=4`).
 - A USB-UART connection. Linux users need read/write on `/dev/ttyUSB*` (usually via the `dialout` group).
 
 From source:
@@ -118,38 +118,42 @@ The ESP panel's **Configuration** section is a typed front-end for the firmware'
 understands; edits stay local until you press **Save & Apply**, which validates
 the whole config and pushes it to the device in one batch.
 
-**The node model.** The **Wi-Fi Mode** selector sets a node's operational mode,
-and the **Collection mode** row sets its collection mode where the mode admits a
-choice; both are attributes of the node model documented in
+**The node model.** The **Wi-Fi Mode** selector sets a node's mode, and the
+**Reporting** row sets whether it reports its CSI to the host where the mode
+admits a choice. Names follow IEEE 802.11bf (session role initiator/responder,
+sensing role, reporting); the model is documented in
 [`esp-csi-rs/docs/network-model.md`](https://github.com/csi-rs/esp-csi-rs/blob/main/docs/network-model.md).
 
 **Mode-aware fields.** Selecting a **Wi-Fi Mode** reshapes the panel so you only
 see knobs that take effect:
 
-- **Station** — STA SSID / password and **Collection mode** are enabled; the
+- **Station** — STA SSID / password and **Reporting** are enabled; the
   **Channel** field is *hidden*, because the channel follows the associated AP
   (the GUI omits `set-wifi --set-channel` in this mode).
 - **Wi-Fi AP** — AP SSID / password / DHCP, the **HT40** secondary channel and
-  **Collection mode** are enabled.
-- **Sniffer** — always a collector; credentials, **Peer MAC**, **HT40** and
-  **Collection mode** are greyed out.
+  **Reporting** are enabled.
+- **Sniffer** — always reports; credentials, **Peer MAC**, **HT40** and
+  **Reporting** are greyed out.
 - **ht20-emitter** / **ht40-emitter** — **Peer MAC** is enabled as the injection
   destination (blank injects to broadcast). Bandwidth comes from the mode
   itself, so there is no separate bandwidth knob.
-- **esp-now-central** / **esp-now-peripheral** — **Peer MAC** (the explicit
+- **esp-now-initiator** / **esp-now-responder** — **Peer MAC** (the explicit
   peer; blank pairs automatically, and when set it must be set on both nodes),
-  **HT40** (forces the per-peer TX PHY) and **Collection mode** are enabled.
+  **HT40** (forces the per-peer TX PHY) and **Reporting** are enabled.
   This pair is also the only place **PHY Rate** is applied; elsewhere it is
   reporting only.
-- **ESP-NOW simplex source** / **peer** (`esp-now-fast-source` /
-  `esp-now-fast-collector`) — the collection mode is fixed by the end: the
-  source floods and reports nothing, the peer measures. Both take **Peer MAC**;
+- **ESP-NOW simplex source** / **peer** (`esp-now-simplex-source` /
+  `esp-now-simplex-peer`) — reporting is fixed by the end: the source floods
+  and reports nothing, the peer measures and reports. Both take **Peer MAC**;
   the source also takes **HT40**.
 
-**Collection mode.** The **Collection mode** row maps to
-`set-wifi --collection=collector|listener` (needs esp-csi-cli-rs 0.8.0 or
-later) and is only sent for the modes above that admit a choice. A listener
-still captures; it just does not report.
+**Reporting.** The **Reporting** row maps to
+`set-wifi --reporting=report|none` (needs esp-csi-cli-rs 0.10.0 or later) and
+is only sent for the modes above that admit a choice. `report` sends the CSI
+to the host; `none` still measures, it just reports nothing.
+
+**Periodicity.** The **Periodicity (Hz)** row and the **Unsolicited** toggle map
+to `set-measurement --periodicity-hz=N --unsolicited=on|off`.
 
 **CSI output.** The **CSI Output** row maps to `set-csi-output --enabled=`
 (default on), the runtime delivery gate. Turning it off keeps the radio capturing — the RX path and its
