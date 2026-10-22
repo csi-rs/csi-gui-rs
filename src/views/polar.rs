@@ -1,4 +1,4 @@
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use egui::Color32;
 use egui_plot::{Line, Plot, PlotPoints, Points};
 use std::f32::consts::TAU;

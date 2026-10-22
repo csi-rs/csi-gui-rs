@@ -6,9 +6,9 @@
 //! is baked into newly captured packets but never retroactively rewrites
 //! packets already in the buffer.
 
-use super::dsp::filter_cir_delay;
 use super::CsiData;
-use savgol_rs::{savgol_filter, SavGolInput};
+use super::dsp::filter_cir_delay;
+use savgol_rs::{SavGolInput, savgol_filter};
 use serde::{Deserialize, Serialize};
 use std::f32::consts::FRAC_1_SQRT_2;
 
@@ -146,7 +146,9 @@ impl Denoising {
             Self::RollingMedian => "Robust smoother; handles anomalous spikes well.",
             Self::SavitzkyGolay => "Polynomial fit that preserves peaks and valleys.",
             Self::Hampel => "Replace outliers (e.g. quantization glitches) via MAD.",
-            Self::ButterworthLowPass => "Low-pass IIR; removes slow drift and high-frequency noise.",
+            Self::ButterworthLowPass => {
+                "Low-pass IIR; removes slow drift and high-frequency noise."
+            }
             Self::WaveletDwt => "Haar wavelet decomposition with coefficient thresholding.",
             Self::FftDelayFilter => "Zero long multipath taps in the CIR (per packet).",
         }
@@ -382,7 +384,7 @@ fn apply_denoising(packets: &mut [CsiData], mode: Denoising, params: &Preprocess
 
 fn odd_window(requested: usize, max_len: usize) -> usize {
     let mut w = requested.max(3).min(max_len);
-    if w % 2 == 0 {
+    if w.is_multiple_of(2) {
         w -= 1;
     }
     w.max(3)
@@ -628,8 +630,8 @@ fn apply_detrending(packets: &mut [CsiData], mode: Detrending, params: &Preproce
                 for t in 0..np {
                     let lo = t.saturating_sub(w / 2);
                     let hi = (t + w / 2 + 1).min(np);
-                    let mean: f32 = (lo..hi).map(|u| amps[k * np + u]).sum::<f32>()
-                        / (hi - lo) as f32;
+                    let mean: f32 =
+                        (lo..hi).map(|u| amps[k * np + u]).sum::<f32>() / (hi - lo) as f32;
                     amps[k * np + t] = (amps[k * np + t] - mean).max(0.0);
                 }
             }
@@ -650,11 +652,7 @@ fn mean_and_std(xs: &[f32]) -> (f32, f32) {
     (m, var.sqrt())
 }
 
-fn apply_feature_scaling(
-    packets: &mut [CsiData],
-    mode: FeatureScaling,
-    params: &PreprocessParams,
-) {
+fn apply_feature_scaling(packets: &mut [CsiData], mode: FeatureScaling, params: &PreprocessParams) {
     if matches!(mode, FeatureScaling::Off) || packets.is_empty() {
         return;
     }
@@ -854,7 +852,10 @@ mod tests {
         let pkts = make_series_packets(&[10.0, 10.0, 100.0, 10.0, 10.0]);
         let out = cfg.apply(&pkts);
         let mid = out[2].amplitude(0);
-        assert!((mid - 10.0).abs() < 5.0, "median should reject spike, got {mid}");
+        assert!(
+            (mid - 10.0).abs() < 5.0,
+            "median should reject spike, got {mid}"
+        );
     }
 
     #[test]

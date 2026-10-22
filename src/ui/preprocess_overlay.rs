@@ -137,10 +137,8 @@ impl PreprocessOverlay {
                                         );
                                     });
                                 }
-                                if matches!(
-                                    self.cfg.feature_scaling,
-                                    FeatureScaling::Quantization
-                                ) {
+                                if matches!(self.cfg.feature_scaling, FeatureScaling::Quantization)
+                                {
                                     ui.horizontal(|ui| {
                                         ui.label("Levels:");
                                         ui.add(
@@ -183,12 +181,7 @@ impl PreprocessOverlay {
     }
 }
 
-fn stage_section(
-    ui: &mut egui::Ui,
-    title: &str,
-    blurb: &str,
-    body: impl FnOnce(&mut egui::Ui),
-) {
+fn stage_section(ui: &mut egui::Ui, title: &str, blurb: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::CollapsingHeader::new(egui::RichText::new(title).strong())
         .default_open(true)
         .show(ui, |ui| {
@@ -265,18 +258,13 @@ fn denoising_params(ui: &mut egui::Ui, cfg: &mut PreprocessConfig) {
         Denoising::RollingMean | Denoising::RollingMedian => {
             ui.horizontal(|ui| {
                 ui.label("Window:");
-                ui.add(
-                    egui::Slider::new(&mut cfg.params.filter_window, 3..=128)
-                        .logarithmic(true),
-                );
+                ui.add(egui::Slider::new(&mut cfg.params.filter_window, 3..=128).logarithmic(true));
             });
         }
         Denoising::SavitzkyGolay => {
             ui.horizontal(|ui| {
                 ui.label("Window:");
-                ui.add(
-                    egui::Slider::new(&mut cfg.params.filter_window, 5..=51).step_by(2.0),
-                );
+                ui.add(egui::Slider::new(&mut cfg.params.filter_window, 5..=51).step_by(2.0));
             });
             ui.horizontal(|ui| {
                 ui.label("Poly order:");
@@ -286,10 +274,7 @@ fn denoising_params(ui: &mut egui::Ui, cfg: &mut PreprocessConfig) {
         Denoising::Hampel => {
             ui.horizontal(|ui| {
                 ui.label("Window:");
-                ui.add(
-                    egui::Slider::new(&mut cfg.params.filter_window, 3..=128)
-                        .logarithmic(true),
-                );
+                ui.add(egui::Slider::new(&mut cfg.params.filter_window, 3..=128).logarithmic(true));
             });
             ui.horizontal(|ui| {
                 ui.label("Sigma (MAD):");
@@ -309,11 +294,9 @@ fn denoising_params(ui: &mut egui::Ui, cfg: &mut PreprocessConfig) {
                 );
             });
             ui.label(
-                egui::RichText::new(
-                    "Packet index is treated as uniform time (1 sample/packet).",
-                )
-                .weak()
-                .small(),
+                egui::RichText::new("Packet index is treated as uniform time (1 sample/packet).")
+                    .weak()
+                    .small(),
             );
         }
         Denoising::WaveletDwt => {
@@ -324,8 +307,7 @@ fn denoising_params(ui: &mut egui::Ui, cfg: &mut PreprocessConfig) {
             ui.horizontal(|ui| {
                 ui.label("Threshold:");
                 ui.add(
-                    egui::Slider::new(&mut cfg.params.dwt_threshold, 0.01..=10.0)
-                        .logarithmic(true),
+                    egui::Slider::new(&mut cfg.params.dwt_threshold, 0.01..=10.0).logarithmic(true),
                 );
             });
             ui.checkbox(&mut cfg.params.dwt_soft_threshold, "Soft threshold");

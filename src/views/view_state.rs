@@ -9,6 +9,15 @@ use serde::{Deserialize, Serialize};
 /// so there is no camera/orbit state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewState {
+    /// Device this pane shows, by id (MAC or port). `None` follows the
+    /// active device.
+    #[serde(default)]
+    pub device: Option<String>,
+
+    /// Evolution pane: overlay every device's curve.
+    #[serde(default)]
+    pub evolution_compare: bool,
+
     /// Console pane: auto-scroll to the most recent line on every push.
     #[serde(default = "default_true")]
     pub console_autoscroll: bool,
@@ -55,6 +64,8 @@ pub struct ViewState {
 impl Default for ViewState {
     fn default() -> Self {
         Self {
+            device: None,
+            evolution_compare: false,
             console_autoscroll: true,
             iq_window: default_iq_window(),
             spectrogram_window: default_spec_window(),

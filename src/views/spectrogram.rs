@@ -1,5 +1,5 @@
 use super::colormap::{swatch_widget, viridis};
-use super::{subcarrier_x_bounds, title_bar, ViewCtx};
+use super::{ViewCtx, subcarrier_x_bounds, title_bar};
 use egui_plot::{Plot, PlotPoints, Polygon};
 use std::f32::consts::PI;
 
@@ -111,7 +111,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         }
         SpectrogramMetric::Amplitude => {
             for (t, stats) in window.iter().enumerate() {
-                let Some(csi) = stats.csi.as_ref() else { continue };
+                let Some(csi) = stats.csi.as_ref() else {
+                    continue;
+                };
                 let limit = subcarriers.min(csi.subcarriers());
                 for s in 0..limit {
                     let v = csi.amplitude(s);
@@ -155,14 +157,13 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     let color = viridis(n);
                     let x = s as f64 + x_offset;
                     let y = t as f64;
-                    let cell: PlotPoints = vec![
-                        [x, y],
-                        [x + 1.0, y],
-                        [x + 1.0, y + 1.0],
-                        [x, y + 1.0],
-                    ]
-                    .into();
-                    plot_ui.polygon(Polygon::new("", cell).fill_color(color).stroke((0.0, color)));
+                    let cell: PlotPoints =
+                        vec![[x, y], [x + 1.0, y], [x + 1.0, y + 1.0], [x, y + 1.0]].into();
+                    plot_ui.polygon(
+                        Polygon::new("", cell)
+                            .fill_color(color)
+                            .stroke((0.0, color)),
+                    );
                 }
             }
         });

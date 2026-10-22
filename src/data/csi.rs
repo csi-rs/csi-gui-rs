@@ -39,8 +39,33 @@ use serde::{Deserialize, Serialize};
 /// let (i, q) = pkt.iq(1);
 /// assert_eq!((i, q), (-5, 3));
 /// ```
+// `serde(default)` on the container lets exports written before a field
+// existed still import: a missing column reads as the field's default.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CsiData {
+    /// Id of the device this packet came from (see
+    /// [`crate::device::DeviceId`]). Empty for packets that were never
+    /// attributed, e.g. imports of files written before 2.0.
+    pub device: String,
+    /// Host wall-clock time the packet was read off the port, in
+    /// microseconds since the Unix epoch.
+    pub host_time_us: u64,
+    /// Base MAC of the node that delivered the frame (wire-v1 `node_id`),
+    /// as `XX:XX:XX:XX:XX:XX`. Empty for text and pre-0.12 formats.
+    pub node_id: String,
+    /// Measurement session the frame belongs to (wire-v1 `session_id`).
+    /// Devices started together with "Start all" share one id.
+    pub session_id: u32,
+    /// Per-node frame counter (wire-v1 `stream_seq`). A gap is a frame
+    /// lost between the radio and the host.
+    pub stream_seq: u32,
+    /// 802.11 sequence number of the sounding frame, when known.
+    pub sequence_number: u32,
+    /// PPDU format, e.g. `"NonHt"`, `"Ht"`, `"HeSu"`. Empty when unknown.
+    pub ppdu: String,
+    /// Channel bandwidth in MHz, or `0` when the firmware did not say.
+    pub bandwidth_mhz: u32,
     /// Source MAC address as `XX:XX:XX:XX:XX:XX` (uppercase hex).
     pub mac: String,
     /// Received signal strength indicator, in dBm.
@@ -140,7 +165,11 @@ impl CsiData {
         if decoded.is_empty() {
             return None;
         }
-        let len = decoded.iter().map(|p| p.csi_raw_data.len()).min().unwrap_or(0);
+        let len = decoded
+            .iter()
+            .map(|p| p.csi_raw_data.len())
+            .min()
+            .unwrap_or(0);
         let mut sum = vec![0i64; len];
         for p in &decoded {
             for (i, v) in p.csi_raw_data.iter().take(len).enumerate() {
@@ -154,6 +183,14 @@ impl CsiData {
         let nf = (decoded.iter().map(|p| p.noise_floor as i64).sum::<i64>() / n) as i32;
         let first = decoded[0];
         Some(CsiData {
+            device: first.device.clone(),
+            host_time_us: first.host_time_us,
+            node_id: first.node_id.clone(),
+            session_id: first.session_id,
+            stream_seq: first.stream_seq,
+            sequence_number: first.sequence_number,
+            ppdu: first.ppdu.clone(),
+            bandwidth_mhz: first.bandwidth_mhz,
             mac: first.mac.clone(),
             rssi,
             rate: first.rate,

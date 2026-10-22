@@ -1,430 +1,744 @@
+//! The device configuration form.
+//!
+//! Every editable `set-*` knob is a [`Field`]. Each field knows its label,
+//! its section, and whether it applies to a given mode and chip, so the
+//! form only shows settings the firmware will actually use. Whole sections
+//! (station credentials, softAP, emitter, the C5/C6 acquisition flags)
+//! disappear when they don't apply, instead of sitting greyed out.
+
+use crate::protocol::command::{apply_csi_preset, csi_preset_names};
 use crate::protocol::config::{
-    CsiDelivery, EspConfig, Ht40, LogMode, PhyRate, Reporting, WifiMode, WifiProtocol, ESP_CONFIG_FIELDS,
-    valid_channel,
+    CsiDelivery, EmitterIface, EspConfig, Ht40, LogMode, MinPhy, PhyRate, ReportTo, Reporting,
+    WifiMode, WifiProtocol, valid_channel,
 };
-use crate::protocol::profile::active_profile;
-use crate::shared::EspSharedState;
+use crate::protocol::info::ChipFamily;
 
-/// Persistent edit buffers for numeric ESP config fields (see `channel_text`).
-pub struct ConfigFieldBuffers {
-    pub periodicity_hz: String,
-    pub c5c6_val_scale_cfg: String,
-    pub start_duration: String,
-}
-
-impl ConfigFieldBuffers {
-    pub fn from_cfg(cfg: &EspConfig) -> Self {
-        Self {
-            periodicity_hz: cfg.periodicity_hz.to_string(),
-            c5c6_val_scale_cfg: cfg.c5c6_val_scale_cfg.to_string(),
-            start_duration: cfg
-                .start_duration_sec
-                .map(|v| v.to_string())
-                .unwrap_or_default(),
-        }
-    }
-}
-
-/// UI shell state for the right-hand ESP control panel.
+/// UI shell state for the right-hand device panel.
 pub struct EspPanel {
     /// Whether the side panel is expanded.
     pub open: bool,
+    /// Text of the raw-command box.
+    pub raw_command: String,
+    /// Index of the device picked as the ESP-NOW responder in the pairing row.
+    pub pair_with: Option<usize>,
 }
 
 impl Default for EspPanel {
     fn default() -> Self {
-        Self { open: true }
+        Self {
+            open: true,
+            raw_command: String::new(),
+            pair_with: None,
+        }
     }
 }
 
-/// Render the scrollable grid of the `set-*` config knobs for one device's
-/// `cfg` into the given `ui`.
-///
-/// Mode-specific fields (STA / AP credentials, peer MAC, HT40,
-/// reporting) are greyed out when the selected [`WifiMode`] doesn't use them, so the
-/// panel only invites edits that will actually take effect. `channel_buf` and
-/// `field_bufs` are the session's persistent edit buffers.
-pub fn config_grid(
-    ui: &mut egui::Ui,
-    cfg: &mut EspConfig,
-    channel_buf: &mut String,
-    field_bufs: &mut ConfigFieldBuffers,
-    shared: &EspSharedState,
-) {
-    let mode = cfg.wifi_mode;
-    egui::Grid::new("esp-config-grid")
-        .num_columns(2)
-        .spacing([12.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for (i, label) in ESP_CONFIG_FIELDS.iter().enumerate() {
-                if !field_visible(i, mode) {
-                    continue;
-                }
-                let enabled = field_enabled(i, mode);
-                ui.add_enabled_ui(enabled, |ui| {
-                    ui.label(*label);
-                });
-                ui.add_enabled_ui(enabled, |ui| {
-                    render_value(ui, i, cfg, channel_buf, field_bufs, shared);
-                });
-                ui.end_row();
+/// Form sections, in display order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    /// Mode, channel, protocol and the per-mode radio knobs.
+    Node,
+    /// Station credentials.
+    Station,
+    /// SoftAP settings.
+    AccessPoint,
+    /// Emitter pacing.
+    Emitter,
+    /// Reporting policy and measurement traffic.
+    Reporting,
+    /// What the firmware delivers and how.
+    Output,
+    /// Which training fields the radio captures.
+    Acquisition,
+    /// Run length.
+    Run,
+}
+
+impl Section {
+    /// Every section, in order.
+    pub const ALL: [Section; 8] = [
+        Section::Node,
+        Section::Station,
+        Section::AccessPoint,
+        Section::Emitter,
+        Section::Reporting,
+        Section::Output,
+        Section::Acquisition,
+        Section::Run,
+    ];
+
+    /// Heading text.
+    pub fn title(self) -> &'static str {
+        match self {
+            Section::Node => "Node",
+            Section::Station => "Station",
+            Section::AccessPoint => "Access point",
+            Section::Emitter => "Emitter",
+            Section::Reporting => "Reporting & traffic",
+            Section::Output => "Output",
+            Section::Acquisition => "CSI acquisition",
+            Section::Run => "Run",
+        }
+    }
+}
+
+/// One editable setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(missing_docs)] // each variant is the setting its label names
+pub enum Field {
+    Mode,
+    Channel,
+    Protocol,
+    He20,
+    PeerMac,
+    Ht40,
+    StaSsid,
+    StaPassword,
+    ApSsid,
+    ApPassword,
+    ApDhcp,
+    ApLeases,
+    ApBurst,
+    InjectPeriod,
+    EmitterIface,
+    Reporting,
+    ReportTo,
+    ThresholdLevel,
+    ThresholdHold,
+    DecimateN,
+    Periodicity,
+    Unsolicited,
+    LogMode,
+    CsiOutput,
+    FilterPeer,
+    FilterMinPhy,
+    Delivery,
+    CsiLogging,
+    TxTask,
+    RxTask,
+    PhyRate,
+    Preset,
+    ClassicLltf,
+    ClassicHtltf,
+    ClassicStbcHtltf,
+    ClassicLtfMerge,
+    C5c6Csi,
+    C5c6Legacy,
+    C5c6Ht20,
+    C5c6Ht40,
+    C5c6Su,
+    C5c6Mu,
+    C5c6Dcm,
+    C5c6Beamformed,
+    C5c6HeStbc,
+    C5c6ValScale,
+    DumpAck,
+    C5ForceLltf,
+    C5Vht,
+    Duration,
+}
+
+impl Field {
+    /// Every field, in display order (grouped by [`Self::section`]).
+    pub const ALL: [Field; 50] = [
+        Field::Mode,
+        Field::Channel,
+        Field::Protocol,
+        Field::He20,
+        Field::PeerMac,
+        Field::Ht40,
+        Field::StaSsid,
+        Field::StaPassword,
+        Field::ApSsid,
+        Field::ApPassword,
+        Field::ApDhcp,
+        Field::ApLeases,
+        Field::ApBurst,
+        Field::InjectPeriod,
+        Field::EmitterIface,
+        Field::Reporting,
+        Field::ReportTo,
+        Field::ThresholdLevel,
+        Field::ThresholdHold,
+        Field::DecimateN,
+        Field::Periodicity,
+        Field::Unsolicited,
+        Field::LogMode,
+        Field::CsiOutput,
+        Field::FilterPeer,
+        Field::FilterMinPhy,
+        Field::Delivery,
+        Field::CsiLogging,
+        Field::TxTask,
+        Field::RxTask,
+        Field::PhyRate,
+        Field::Preset,
+        Field::ClassicLltf,
+        Field::ClassicHtltf,
+        Field::ClassicStbcHtltf,
+        Field::ClassicLtfMerge,
+        Field::C5c6Csi,
+        Field::C5c6Legacy,
+        Field::C5c6Ht20,
+        Field::C5c6Ht40,
+        Field::C5c6Su,
+        Field::C5c6Mu,
+        Field::C5c6Dcm,
+        Field::C5c6Beamformed,
+        Field::C5c6HeStbc,
+        Field::C5c6ValScale,
+        Field::DumpAck,
+        Field::C5ForceLltf,
+        Field::C5Vht,
+        Field::Duration,
+    ];
+
+    /// Row label.
+    pub fn label(self) -> &'static str {
+        match self {
+            Field::Mode => "Mode",
+            Field::Channel => "Channel",
+            Field::Protocol => "Wi-Fi protocol",
+            Field::He20 => "HE20 (802.11ax)",
+            Field::PeerMac => "Peer MAC",
+            Field::Ht40 => "HT40",
+            Field::StaSsid => "SSID",
+            Field::StaPassword => "Password",
+            Field::ApSsid => "SSID",
+            Field::ApPassword => "Password",
+            Field::ApDhcp => "DHCP server",
+            Field::ApLeases => "DHCP leases",
+            Field::ApBurst => "Burst flood",
+            Field::InjectPeriod => "Inject period (µs)",
+            Field::EmitterIface => "Interface",
+            Field::Reporting => "Reporting",
+            Field::ReportTo => "Report to",
+            Field::ThresholdLevel => "Threshold level",
+            Field::ThresholdHold => "Hold (ms)",
+            Field::DecimateN => "Every n-th",
+            Field::Periodicity => "Periodicity (Hz)",
+            Field::Unsolicited => "Unsolicited replies",
+            Field::LogMode => "Log mode",
+            Field::CsiOutput => "CSI output",
+            Field::FilterPeer => "Only from MAC",
+            Field::FilterMinPhy => "Minimum PHY",
+            Field::Delivery => "Delivery",
+            Field::CsiLogging => "Per-packet logging",
+            Field::TxTask => "TX task",
+            Field::RxTask => "RX task",
+            Field::PhyRate => "PHY rate",
+            Field::Preset => "Preset",
+            Field::ClassicLltf => "L-LTF",
+            Field::ClassicHtltf => "HT-LTF",
+            Field::ClassicStbcHtltf => "STBC HT-LTF",
+            Field::ClassicLtfMerge => "LTF merge",
+            Field::C5c6Csi => "CSI (master)",
+            Field::C5c6Legacy => "Legacy (11g)",
+            Field::C5c6Ht20 => "HT20",
+            Field::C5c6Ht40 => "HT40",
+            Field::C5c6Su => "HE SU",
+            Field::C5c6Mu => "HE MU",
+            Field::C5c6Dcm => "HE DCM",
+            Field::C5c6Beamformed => "HE beamformed",
+            Field::C5c6HeStbc => "HE STBC",
+            Field::C5c6ValScale => "Value scale (0–3)",
+            Field::DumpAck => "Dump ACK frames",
+            Field::C5ForceLltf => "Force L-LTF (C5)",
+            Field::C5Vht => "VHT20 (C5)",
+            Field::Duration => "Duration",
+        }
+    }
+
+    /// Hover text explaining the setting.
+    pub fn help(self) -> &'static str {
+        match self {
+            Field::Mode => {
+                "How the node reaches the channel. Session and sensing roles follow from it."
             }
-        });
-}
-
-/// Commit edit buffers into `cfg` and validate. Returns `Ok(())`
-/// when the config is safe to push to the device.
-pub fn commit_and_validate(
-    cfg: &mut EspConfig,
-    channel_buf: &str,
-    field_bufs: &mut ConfigFieldBuffers,
-) -> Result<(), String> {
-    commit_channel(cfg, channel_buf);
-    commit_numeric_fields(cfg, field_bufs);
-    cfg.validate()
-}
-
-/// Whether the config row at `idx` is shown at all for the current
-/// [`WifiMode`]. The channel is assigned by the associated AP in Station
-/// mode, so its row is hidden there (and omitted from the pushed config).
-/// The preset row is hidden unless the installed profile offers presets.
-/// Indices must track `ESP_CONFIG_FIELDS`.
-fn field_visible(idx: usize, mode: WifiMode) -> bool {
-    match idx {
-        // Channel
-        2 => mode != WifiMode::Station,
-        // CSI preset
-        29 => !active_profile().preset_names().is_empty(),
-        _ => true,
-    }
-}
-
-/// Whether the config row at `idx` (index into `ESP_CONFIG_FIELDS`) applies
-/// to the current [`WifiMode`]. Credentials / destination settings that the
-/// mode doesn't use are greyed out. Indices must track `ESP_CONFIG_FIELDS`.
-fn field_enabled(idx: usize, mode: WifiMode) -> bool {
-    match idx {
-        // STA SSID / STA Password
-        3 | 4 => mode == WifiMode::Station,
-        // AP SSID / AP Password / AP DHCP
-        5..=7 => mode == WifiMode::WifiAp,
-        // Peer MAC — the emitters' destination, the ESP-NOW modes' explicit peer.
-        8 => mode.uses_peer_mac(),
-        // HT40 — the softAP's secondary channel, the ESP-NOW per-peer TX PHY.
-        9 => mode.uses_ht40(),
-        // Reporting — only where the mode admits a choice.
-        10 => mode.admits_reporting_choice(),
-        _ => true,
-    }
-}
-
-fn commit_channel(cfg: &mut EspConfig, buf: &str) {
-    if let Ok(v) = buf.trim().parse::<u8>() {
-        cfg.channel = v; // `cfg.validate()` surfaces out-of-range values to the user.
-    }
-}
-
-fn commit_numeric_fields(cfg: &mut EspConfig, bufs: &ConfigFieldBuffers) {
-    if let Ok(v) = bufs.periodicity_hz.trim().parse::<u64>() {
-        cfg.periodicity_hz = v;
-    }
-    if let Ok(v) = bufs.c5c6_val_scale_cfg.trim().parse::<u32>() {
-        if v <= 3 {
-            cfg.c5c6_val_scale_cfg = v;
-        }
-    }
-    cfg.start_duration_sec = if bufs.start_duration.trim().is_empty() {
-        None
-    } else {
-        bufs.start_duration.trim().parse().ok()
-    };
-}
-
-fn enum_combo<T: Copy + PartialEq>(
-    ui: &mut egui::Ui,
-    id: &str,
-    value: &mut T,
-    options: &[(T, &'static str)],
-    shared: &EspSharedState,
-) {
-    let current = options
-        .iter()
-        .find(|(v, _)| *v == *value)
-        .map(|(_, l)| *l)
-        .unwrap_or("?");
-    egui::ComboBox::from_id_salt(id)
-        .selected_text(current)
-        .width(140.0)
-        .show_ui(ui, |ui| {
-            for (v, label) in options {
-                if ui.selectable_label(*value == *v, *label).clicked() {
-                    *value = *v;
-                    shared.mark_config_dirty();
-                }
+            Field::Channel => {
+                "Wi-Fi channel. Ignored in station mode, where the AP picks it. 5 GHz needs an ESP32-C5."
             }
-        });
+            Field::Protocol => "set-protocol. `ax` is ESP32-C5/C6 only.",
+            Field::He20 => {
+                "Force HE20 (802.11ax SU) on the emitters and the ESP-NOW pair. Pair the receivers with the he20 preset."
+            }
+            Field::PeerMac => {
+                "Emitters: injection destination (blank = broadcast). ESP-NOW: explicit peer (blank = auto-pair; set it on both ends)."
+            }
+            Field::Ht40 => {
+                "wifi-ap: softAP secondary channel. ESP-NOW: force the per-peer TX PHY to HT40."
+            }
+            Field::ApLeases => {
+                "DHCP pool size. More than one lease round-robins the flood across every station."
+            }
+            Field::ApBurst => {
+                "Send one frame to every station back-to-back each tick: time-aligned multi-receiver capture."
+            }
+            Field::InjectPeriod => "Delay between injected frames. 20000 µs ≈ 50 frames/s.",
+            Field::Reporting => {
+                "Whether measurements leave the node: every one, none, only while the channel moves (threshold), or every n-th."
+            }
+            Field::ReportTo => {
+                "host = the serial output this GUI reads. local = on-device consumers only (plots stay empty)."
+            }
+            Field::ThresholdLevel => {
+                "Score at or above which a measurement is reported. Uncalibrated: a still room is not zero, so calibrate on your link."
+            }
+            Field::ThresholdHold => "Keep reporting this long after crossing the threshold.",
+            Field::DecimateN => "Report every n-th measurement.",
+            Field::Periodicity => {
+                "Rate of the sounding traffic this node generates. 0 disables it."
+            }
+            Field::Unsolicited => {
+                "Flood echo replies instead of requests: one-directional traffic, no CSI back to this node."
+            }
+            Field::LogMode => {
+                "Output format. serialized is the most compact and carries the most metadata."
+            }
+            Field::CsiOutput => "Runtime delivery gate: off keeps capturing but delivers nothing.",
+            Field::FilterPeer => "Deliver CSI only for frames from this transmitter. Blank = any.",
+            Field::FilterMinPhy => "ht drops legacy 11b/g frames.",
+            Field::Delivery => "raw is a zero-copy benchmark path: nothing is delivered or logged.",
+            Field::PhyRate => "Reporting only, except on the ESP-NOW pair, which applies it.",
+            Field::Preset => {
+                "he20: HE-LTF only (legacy, HT and ACK off), for the receivers of an HE20 link."
+            }
+            Field::Duration => "Stop the run by itself after this long. Off = until stopped.",
+            _ => "",
+        }
+    }
+
+    /// The section the field lives in.
+    pub fn section(self) -> Section {
+        use Field::*;
+        match self {
+            Mode | Channel | Protocol | He20 | PeerMac | Ht40 => Section::Node,
+            StaSsid | StaPassword => Section::Station,
+            ApSsid | ApPassword | ApDhcp | ApLeases | ApBurst => Section::AccessPoint,
+            InjectPeriod | EmitterIface => Section::Emitter,
+            Reporting | ReportTo | ThresholdLevel | ThresholdHold | DecimateN | Periodicity
+            | Unsolicited => Section::Reporting,
+            LogMode | CsiOutput | FilterPeer | FilterMinPhy | Delivery | CsiLogging | TxTask
+            | RxTask | PhyRate => Section::Output,
+            Preset | ClassicLltf | ClassicHtltf | ClassicStbcHtltf | ClassicLtfMerge | C5c6Csi
+            | C5c6Legacy | C5c6Ht20 | C5c6Ht40 | C5c6Su | C5c6Mu | C5c6Dcm | C5c6Beamformed
+            | C5c6HeStbc | C5c6ValScale | DumpAck | C5ForceLltf | C5Vht => Section::Acquisition,
+            Duration => Section::Run,
+        }
+    }
+
+    /// Whether the field applies to `cfg` on `chip`. Fields that don't are
+    /// not shown. An unidentified chip shows the fields of every chip.
+    pub fn visible(self, cfg: &EspConfig, chip: ChipFamily) -> bool {
+        use Field::*;
+        let mode = cfg.wifi_mode;
+        let unknown = chip == ChipFamily::Unknown;
+        let classic = chip.is_classic() || unknown;
+        let c5c6 = chip.is_c5c6() || unknown;
+        let c5 = chip == ChipFamily::Esp32C5 || unknown;
+        let preset = cfg.csi_preset.is_some();
+        match self {
+            Channel => mode != WifiMode::Station,
+            He20 => mode.uses_he20() && c5c6,
+            PeerMac => mode.uses_peer_mac(),
+            Ht40 => mode.uses_ht40(),
+            StaSsid | StaPassword => mode == WifiMode::Station,
+            ApSsid | ApPassword | ApDhcp | ApLeases | ApBurst => mode == WifiMode::WifiAp,
+            InjectPeriod | EmitterIface => mode.is_emitter(),
+            Reporting | ReportTo => mode.admits_reporting_choice(),
+            ThresholdLevel | ThresholdHold => {
+                mode.admits_reporting_choice()
+                    && cfg.reporting == crate::protocol::config::Reporting::Threshold
+            }
+            DecimateN => {
+                mode.admits_reporting_choice()
+                    && cfg.reporting == crate::protocol::config::Reporting::Decimate
+            }
+            Periodicity | Unsolicited => mode.uses_periodicity(),
+            // CSI capture settings mean nothing on a node that captures none.
+            CsiOutput | FilterPeer | FilterMinPhy | Delivery | CsiLogging => !mode.reports_no_csi(),
+            Preset => c5c6 && !mode.reports_no_csi(),
+            ClassicLltf | ClassicHtltf | ClassicStbcHtltf | ClassicLtfMerge => {
+                classic && !mode.reports_no_csi()
+            }
+            C5c6Csi | C5c6Legacy | C5c6Ht20 | C5c6Ht40 | C5c6Su | C5c6Mu | C5c6Dcm
+            | C5c6Beamformed | C5c6HeStbc | C5c6ValScale | DumpAck => {
+                c5c6 && !mode.reports_no_csi() && !preset
+            }
+            C5ForceLltf | C5Vht => c5 && !mode.reports_no_csi() && !preset,
+            Mode | Protocol | LogMode | TxTask | RxTask | PhyRate | Duration => true,
+        }
+    }
 }
 
-fn render_value(
+/// Channels offered for `chip`: 2.4 GHz everywhere, 5 GHz on the C5 (and
+/// on a chip not identified yet).
+pub fn channels_for(chip: ChipFamily) -> Vec<u8> {
+    let mut v: Vec<u8> = (1..=14).collect();
+    if chip == ChipFamily::Esp32C5 || chip == ChipFamily::Unknown {
+        v.extend([36, 40, 44, 48, 149, 153, 157, 161, 165]);
+    }
+    v.retain(|c| valid_channel(*c));
+    v
+}
+
+/// Render the form for `cfg` on `chip`. Returns `true` when anything
+/// changed. `id` keeps widget ids unique when several forms exist.
+pub fn config_form(
     ui: &mut egui::Ui,
-    idx: usize,
+    id: impl std::hash::Hash,
     cfg: &mut EspConfig,
-    channel_buf: &mut String,
-    field_bufs: &mut ConfigFieldBuffers,
-    shared: &EspSharedState,
-) {
-    // Index order MUST match `ESP_CONFIG_FIELDS` in `protocol::config`.
-    match idx {
-        0 => {
-            enum_combo(
-                ui,
-                "wifi_mode",
-                &mut cfg.wifi_mode,
-                &WifiMode::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
-        }
-        1 => {
-            enum_combo(
-                ui,
-                "protocol",
-                &mut cfg.protocol,
-                &WifiProtocol::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
-        }
-        2 => {
-            ui.horizontal(|ui| {
-                if ui
-                    .add(egui::TextEdit::singleline(channel_buf).desired_width(70.0))
-                    .changed()
-                {
-                    shared.mark_config_dirty();
-                    if let Ok(v) = channel_buf.trim().parse::<u8>() {
-                        if valid_channel(v) {
-                            cfg.channel = v;
+    chip: ChipFamily,
+) -> bool {
+    let mut changed = false;
+    ui.push_id(id, |ui| {
+        for section in Section::ALL {
+            let fields: Vec<Field> = Field::ALL
+                .into_iter()
+                .filter(|f| f.section() == section && f.visible(cfg, chip))
+                .collect();
+            if fields.is_empty() {
+                continue;
+            }
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(section.title()).strong().small());
+            egui::Grid::new(("cfg-grid", section.title()))
+                .num_columns(2)
+                .spacing([10.0, 4.0])
+                .min_col_width(110.0)
+                .striped(true)
+                .show(ui, |ui| {
+                    for f in fields {
+                        let label = ui.label(f.label());
+                        if !f.help().is_empty() {
+                            label.on_hover_text(f.help());
                         }
+                        changed |= field_editor(ui, f, cfg, chip);
+                        ui.end_row();
                     }
-                }
-                ui.label(
-                    egui::RichText::new("1-14, 36/40/44/48, 149…165")
-                        .weak()
-                        .small(),
-                );
-            });
+                });
         }
-        3 => text_field(ui, &mut cfg.sta_ssid, 32, false, shared),
-        4 => text_field(ui, &mut cfg.sta_password, 32, true, shared),
-        5 => text_field(ui, &mut cfg.ap_ssid, 32, false, shared),
-        6 => text_field(ui, &mut cfg.ap_password, 32, true, shared),
-        7 => toggle(ui, &mut cfg.ap_dhcp, shared),
-        8 => {
-            let mut s = cfg.peer_mac.clone();
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut s)
-                        .hint_text("aa:bb:cc:dd:ee:ff (blank = broadcast)")
-                        .desired_width(180.0),
-                )
-                .changed()
-            {
-                cfg.peer_mac = s;
-                shared.mark_config_dirty();
-            }
-        }
-        9 => {
-            enum_combo(
-                ui,
-                "ht40",
-                &mut cfg.ht40,
-                &Ht40::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
-        }
-        10 => {
-            enum_combo(
-                ui,
-                "reporting",
-                &mut cfg.reporting,
-                &Reporting::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
-        }
-        11 => {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut field_bufs.periodicity_hz)
-                        .desired_width(100.0),
-                )
-                .changed()
-            {
-                shared.mark_config_dirty();
-                if let Ok(v) = field_bufs.periodicity_hz.trim().parse::<u64>() {
-                    cfg.periodicity_hz = v;
+    });
+    changed
+}
+
+fn field_editor(ui: &mut egui::Ui, f: Field, cfg: &mut EspConfig, chip: ChipFamily) -> bool {
+    match f {
+        Field::Mode => {
+            let before = cfg.wifi_mode;
+            let changed = combo(ui, "mode", &mut cfg.wifi_mode, &WifiMode::ALL, |m| m.cli());
+            if changed && before != cfg.wifi_mode {
+                // A sniffer can't report none: move it to the default.
+                if !cfg.reporting.allowed_for(cfg.wifi_mode) {
+                    cfg.reporting = Reporting::Report;
                 }
             }
+            ui.end_row();
+            ui.label("");
+            ui.label(egui::RichText::new(cfg.wifi_mode.describe()).weak().small());
+            changed
         }
-        12 => toggle(ui, &mut cfg.unsolicited, shared),
-        13 => toggle(ui, &mut cfg.csi_output, shared),
-        14 => {
-            let selected = format!(
-                "{} {}",
-                cfg.log_mode.cli(),
-                if cfg.log_mode.host_parses() {
-                    "(host parses)"
-                } else {
-                    "(device-only)"
-                }
-            );
-            egui::ComboBox::from_id_salt("log_mode")
-                .selected_text(selected)
-                .width(180.0)
+        Field::Channel => {
+            let opts = channels_for(chip);
+            let mut c = cfg.channel;
+            let r = egui::ComboBox::from_id_salt("channel")
+                .selected_text(channel_label(c))
+                .width(140.0)
                 .show_ui(ui, |ui| {
-                    for mode in LogMode::ALL {
-                        let label = format!(
-                            "{} {}",
-                            mode.cli(),
-                            if mode.host_parses() {
-                                "(host parses)"
-                            } else {
-                                "(device-only)"
-                            }
-                        );
-                        if ui
-                            .selectable_label(cfg.log_mode == mode, label)
-                            .clicked()
-                        {
-                            cfg.log_mode = mode;
-                            shared.mark_config_dirty();
-                        }
+                    for ch in opts {
+                        ui.selectable_value(&mut c, ch, channel_label(ch));
                     }
                 });
+            let _ = r;
+            let changed = c != cfg.channel;
+            cfg.channel = c;
+            changed
         }
-        15 => {
-            enum_combo(
-                ui,
-                "phy_rate",
-                &mut cfg.phy_rate,
-                &PhyRate::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
+        Field::Protocol => {
+            let opts: Vec<WifiProtocol> = WifiProtocol::ALL
+                .into_iter()
+                .filter(|p| p.supported_on(chip))
+                .collect();
+            combo(ui, "protocol", &mut cfg.protocol, &opts, |p| p.cli())
         }
-        16 => toggle(ui, &mut cfg.tx_task, shared),
-        17 => toggle(ui, &mut cfg.rx_task, shared),
-        18 => {
-            enum_combo(
-                ui,
-                "csi_delivery",
-                &mut cfg.csi_delivery,
-                &CsiDelivery::ALL.map(|m| (m, m.cli())),
-                shared,
-            );
+        Field::He20 => toggle(ui, &mut cfg.he20),
+        Field::PeerMac => mac_edit(ui, &mut cfg.peer_mac, "blank = broadcast / auto-pair"),
+        Field::Ht40 => combo(ui, "ht40", &mut cfg.ht40, &Ht40::ALL, |h| h.cli()),
+        Field::StaSsid => text(ui, &mut cfg.sta_ssid, false),
+        Field::StaPassword => text(ui, &mut cfg.sta_password, true),
+        Field::ApSsid => text(ui, &mut cfg.ap_ssid, false),
+        Field::ApPassword => text(ui, &mut cfg.ap_password, true),
+        Field::ApDhcp => toggle(ui, &mut cfg.ap_dhcp),
+        Field::ApLeases => drag(ui, &mut cfg.ap_leases, 1..=8, ""),
+        Field::ApBurst => toggle(ui, &mut cfg.ap_burst),
+        Field::InjectPeriod => drag(ui, &mut cfg.inject_period_us, 100..=10_000_000, " µs"),
+        Field::EmitterIface => combo(
+            ui,
+            "iface",
+            &mut cfg.emitter_iface,
+            &EmitterIface::ALL,
+            |i| i.cli(),
+        ),
+        Field::Reporting => {
+            let opts: Vec<Reporting> = Reporting::ALL
+                .into_iter()
+                .filter(|r| r.allowed_for(cfg.wifi_mode))
+                .collect();
+            combo(ui, "reporting", &mut cfg.reporting, &opts, |r| r.cli())
         }
-        19 => toggle(ui, &mut cfg.csi_logging, shared),
-        20 => toggle(ui, &mut cfg.classic_lltf_en, shared),
-        21 => toggle(ui, &mut cfg.classic_htltf_en, shared),
-        22 => toggle(ui, &mut cfg.classic_stbc_htltf_en, shared),
-        23 => toggle(ui, &mut cfg.classic_ltf_merge_en, shared),
-        24 => toggle(ui, &mut cfg.c5c6_csi_en, shared),
-        25 => toggle(ui, &mut cfg.c5c6_csi_legacy_en, shared),
-        26 => toggle(ui, &mut cfg.c5c6_csi_ht20_en, shared),
-        27 => toggle(ui, &mut cfg.c5c6_csi_ht40_en, shared),
-        28 => {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut field_bufs.c5c6_val_scale_cfg)
-                        .desired_width(50.0),
-                )
-                .changed()
-            {
-                shared.mark_config_dirty();
-                if let Ok(v) = field_bufs.c5c6_val_scale_cfg.trim().parse::<u32>() {
-                    if v <= 3 {
-                        cfg.c5c6_val_scale_cfg = v;
-                    }
-                }
+        Field::ReportTo => {
+            let c = combo(ui, "report_to", &mut cfg.report_to, &ReportTo::ALL, |r| {
+                r.cli()
+            });
+            if cfg.report_to == ReportTo::Local {
+                ui.end_row();
+                ui.label("");
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 60),
+                    egui::RichText::new("local: nothing reaches this GUI").small(),
+                );
             }
+            c
         }
-        29 => {
-            // Preset names come from the installed profile; this crate names
-            // none. `default` clears back to the individual acquisition flags.
-            let selected = cfg.csi_preset.clone().unwrap_or_else(|| "default".into());
-            egui::ComboBox::from_id_salt("csi_preset")
-                .selected_text(selected.clone())
+        Field::ThresholdLevel => drag(ui, &mut cfg.threshold_level, 0..=u16::MAX, ""),
+        Field::ThresholdHold => drag(ui, &mut cfg.threshold_hold_ms, 0..=600_000, " ms"),
+        Field::DecimateN => drag(ui, &mut cfg.decimate_n, 1..=10_000, ""),
+        Field::Periodicity => drag(ui, &mut cfg.periodicity_hz, 0..=10_000, " Hz"),
+        Field::Unsolicited => toggle(ui, &mut cfg.unsolicited),
+        Field::LogMode => combo(ui, "log_mode", &mut cfg.log_mode, &LogMode::ALL, |m| {
+            m.cli()
+        }),
+        Field::CsiOutput => toggle(ui, &mut cfg.csi_output),
+        Field::FilterPeer => mac_edit(ui, &mut cfg.csi_filter_peer, "blank = any"),
+        Field::FilterMinPhy => combo(
+            ui,
+            "min_phy",
+            &mut cfg.csi_filter_min_phy,
+            &MinPhy::ALL,
+            |m| m.cli(),
+        ),
+        Field::Delivery => combo(
+            ui,
+            "delivery",
+            &mut cfg.csi_delivery,
+            &CsiDelivery::ALL,
+            |d| d.cli(),
+        ),
+        Field::CsiLogging => toggle(ui, &mut cfg.csi_logging),
+        Field::TxTask => toggle(ui, &mut cfg.tx_task),
+        Field::RxTask => toggle(ui, &mut cfg.rx_task),
+        Field::PhyRate => combo(ui, "phy_rate", &mut cfg.phy_rate, &PhyRate::ALL, |r| {
+            r.cli()
+        }),
+        Field::Preset => {
+            let mut changed = false;
+            let current = cfg.csi_preset.clone().unwrap_or_else(|| "custom".into());
+            egui::ComboBox::from_id_salt("preset")
+                .selected_text(&current)
                 .width(140.0)
                 .show_ui(ui, |ui| {
                     if ui
-                        .selectable_label(cfg.csi_preset.is_none(), "default")
+                        .selectable_label(cfg.csi_preset.is_none(), "custom")
                         .clicked()
                     {
                         cfg.csi_preset = None;
-                        shared.mark_config_dirty();
+                        changed = true;
                     }
-                    for name in active_profile().preset_names() {
-                        if ui.selectable_label(selected == *name, *name).clicked() {
-                            cfg.csi_preset = Some((*name).to_string());
-                            // Fold the preset into the toggles so the panel
-                            // shows what the device will run.
-                            active_profile().apply_preset(name, cfg);
-                            shared.mark_config_dirty();
+                    for name in csi_preset_names() {
+                        if ui.selectable_label(current == name, name).clicked() {
+                            cfg.csi_preset = Some(name.to_string());
+                            apply_csi_preset(name, cfg);
+                            changed = true;
                         }
                     }
                 });
+            changed
         }
-        30 => toggle(ui, &mut cfg.csi_dump_ack, shared),
-        31 => toggle(ui, &mut cfg.c5_csi_force_lltf, shared),
-        32 => toggle(ui, &mut cfg.c5_csi_vht, shared),
-        33 => {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut field_bufs.start_duration)
-                        .hint_text("empty = unlimited")
-                        .desired_width(90.0),
-                )
-                .changed()
-            {
-                shared.mark_config_dirty();
-                cfg.start_duration_sec = if field_bufs.start_duration.trim().is_empty() {
-                    None
-                } else {
-                    field_bufs.start_duration.trim().parse().ok()
-                };
-            }
-        }
-        _ => {
-            ui.label("?");
+        Field::ClassicLltf => toggle(ui, &mut cfg.classic_lltf_en),
+        Field::ClassicHtltf => toggle(ui, &mut cfg.classic_htltf_en),
+        Field::ClassicStbcHtltf => toggle(ui, &mut cfg.classic_stbc_htltf_en),
+        Field::ClassicLtfMerge => toggle(ui, &mut cfg.classic_ltf_merge_en),
+        Field::C5c6Csi => toggle(ui, &mut cfg.c5c6_csi_en),
+        Field::C5c6Legacy => toggle(ui, &mut cfg.c5c6_csi_legacy_en),
+        Field::C5c6Ht20 => toggle(ui, &mut cfg.c5c6_csi_ht20_en),
+        Field::C5c6Ht40 => toggle(ui, &mut cfg.c5c6_csi_ht40_en),
+        Field::C5c6Su => toggle(ui, &mut cfg.c5c6_csi_su),
+        Field::C5c6Mu => toggle(ui, &mut cfg.c5c6_csi_mu),
+        Field::C5c6Dcm => toggle(ui, &mut cfg.c5c6_csi_dcm),
+        Field::C5c6Beamformed => toggle(ui, &mut cfg.c5c6_csi_beamformed),
+        Field::C5c6HeStbc => toggle(ui, &mut cfg.c5c6_csi_he_stbc),
+        Field::C5c6ValScale => drag(ui, &mut cfg.c5c6_val_scale_cfg, 0..=3, ""),
+        Field::DumpAck => toggle(ui, &mut cfg.csi_dump_ack),
+        Field::C5ForceLltf => toggle(ui, &mut cfg.c5_csi_force_lltf),
+        Field::C5Vht => toggle(ui, &mut cfg.c5_csi_vht),
+        Field::Duration => {
+            let mut limited = cfg.start_duration_sec.is_some();
+            let mut changed = false;
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut limited, "limit").changed() {
+                    cfg.start_duration_sec = limited.then_some(60);
+                    changed = true;
+                }
+                if let Some(d) = cfg.start_duration_sec.as_mut() {
+                    changed |= ui
+                        .add(egui::DragValue::new(d).range(1..=86_400).suffix(" s"))
+                        .changed();
+                }
+            });
+            changed
         }
     }
 }
 
-/// Length-capped single-line text field (optionally masked).
-fn text_field(
+fn channel_label(c: u8) -> String {
+    if c > 14 {
+        format!("{c} (5 GHz)")
+    } else {
+        format!("{c} (2.4 GHz)")
+    }
+}
+
+fn combo<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
-    field: &mut String,
-    max: usize,
-    password: bool,
-    shared: &EspSharedState,
-) {
-    let mut s = field.clone();
-    if ui
-        .add(
-            egui::TextEdit::singleline(&mut s)
-                .password(password)
-                .desired_width(180.0),
-        )
+    id: &str,
+    value: &mut T,
+    options: &[T],
+    label: impl Fn(T) -> &'static str,
+) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label(*value))
+        .width(140.0)
+        .show_ui(ui, |ui| {
+            for &v in options {
+                if ui.selectable_label(*value == v, label(v)).clicked() && *value != v {
+                    *value = v;
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+fn toggle(ui: &mut egui::Ui, b: &mut bool) -> bool {
+    ui.checkbox(b, if *b { "on" } else { "off" }).changed()
+}
+
+fn drag<T: egui::emath::Numeric>(
+    ui: &mut egui::Ui,
+    v: &mut T,
+    range: std::ops::RangeInclusive<T>,
+    suffix: &str,
+) -> bool {
+    ui.add(egui::DragValue::new(v).range(range).suffix(suffix))
         .changed()
-        && s.len() <= max
-    {
-        *field = s;
-        shared.mark_config_dirty();
+}
+
+fn text(ui: &mut egui::Ui, s: &mut String, password: bool) -> bool {
+    let mut buf = s.clone();
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut buf)
+            .password(password)
+            .char_limit(32)
+            .desired_width(160.0),
+    );
+    if r.changed() {
+        *s = buf;
+        true
+    } else {
+        false
     }
 }
 
-fn toggle(ui: &mut egui::Ui, b: &mut bool, shared: &EspSharedState) {
-    let label = if *b { "on" } else { "off" };
-    if ui.button(label).clicked() {
-        *b = !*b;
-        shared.mark_config_dirty();
+fn mac_edit(ui: &mut egui::Ui, s: &mut String, hint: &str) -> bool {
+    let ok = crate::protocol::config::valid_peer_mac(s.trim());
+    let r = ui.add(
+        egui::TextEdit::singleline(s)
+            .hint_text(hint)
+            .char_limit(17)
+            .desired_width(160.0)
+            .text_color_opt((!ok).then_some(egui::Color32::from_rgb(230, 90, 90))),
+    );
+    r.changed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::config::Reporting as Rep;
+
+    fn shown(cfg: &EspConfig, chip: ChipFamily) -> Vec<Field> {
+        Field::ALL
+            .into_iter()
+            .filter(|f| f.visible(cfg, chip))
+            .collect()
+    }
+
+    #[test]
+    fn chip_decides_acquisition_rows() {
+        let cfg = EspConfig::default();
+        let s3 = shown(&cfg, ChipFamily::Esp32S3);
+        assert!(s3.contains(&Field::ClassicLltf));
+        assert!(!s3.contains(&Field::C5c6Su));
+        assert!(!s3.contains(&Field::Preset));
+        let c6 = shown(&cfg, ChipFamily::Esp32C6);
+        assert!(c6.contains(&Field::C5c6Su));
+        assert!(!c6.contains(&Field::ClassicLltf));
+        assert!(!c6.contains(&Field::C5Vht), "VHT is C5-only");
+        assert!(shown(&cfg, ChipFamily::Esp32C5).contains(&Field::C5Vht));
+    }
+
+    #[test]
+    fn mode_decides_node_rows() {
+        let mut cfg = EspConfig {
+            wifi_mode: WifiMode::Station,
+            ..EspConfig::default()
+        };
+        let st = shown(&cfg, ChipFamily::Esp32);
+        assert!(st.contains(&Field::StaSsid) && !st.contains(&Field::Channel));
+        assert!(!st.contains(&Field::ApLeases));
+
+        cfg.wifi_mode = WifiMode::Ht20Emitter;
+        let em = shown(&cfg, ChipFamily::Esp32C5);
+        assert!(em.contains(&Field::InjectPeriod) && em.contains(&Field::He20));
+        assert!(!em.contains(&Field::Reporting), "emitters report none");
+        assert!(!em.contains(&Field::C5c6Su), "emitters capture nothing");
+        assert!(!shown(&cfg, ChipFamily::Esp32).contains(&Field::He20));
+    }
+
+    #[test]
+    fn reporting_parameters_follow_the_policy() {
+        let mut cfg = EspConfig::default();
+        assert!(!shown(&cfg, ChipFamily::Esp32).contains(&Field::ThresholdLevel));
+        cfg.reporting = Rep::Threshold;
+        let f = shown(&cfg, ChipFamily::Esp32);
+        assert!(f.contains(&Field::ThresholdLevel) && f.contains(&Field::ThresholdHold));
+        cfg.reporting = Rep::Decimate;
+        assert!(shown(&cfg, ChipFamily::Esp32).contains(&Field::DecimateN));
+    }
+
+    #[test]
+    fn preset_hides_individual_c5c6_flags() {
+        let cfg = EspConfig {
+            csi_preset: Some("he20".into()),
+            ..EspConfig::default()
+        };
+        let f = shown(&cfg, ChipFamily::Esp32C5);
+        assert!(f.contains(&Field::Preset));
+        assert!(!f.contains(&Field::C5c6Legacy));
+    }
+
+    #[test]
+    fn five_ghz_channels_only_on_c5() {
+        assert!(channels_for(ChipFamily::Esp32C5).contains(&149));
+        assert!(!channels_for(ChipFamily::Esp32S3).contains(&149));
+    }
+
+    #[test]
+    fn every_field_has_a_section_and_label() {
+        for f in Field::ALL {
+            assert!(!f.label().is_empty());
+            let _ = f.section();
+        }
     }
 }

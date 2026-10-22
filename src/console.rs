@@ -76,7 +76,11 @@ impl RawConsole {
 
     /// Drop all retained lines.
     pub fn clear(&self) {
-        self.inner.lock().expect("RawConsole mutex poisoned").lines.clear();
+        self.inner
+            .lock()
+            .expect("RawConsole mutex poisoned")
+            .lines
+            .clear();
     }
 
     /// Copy the most recent `n` lines (or all if `n` is `None`). Returned
@@ -95,7 +99,11 @@ impl RawConsole {
 
     /// Current number of retained lines.
     pub fn len(&self) -> usize {
-        self.inner.lock().expect("RawConsole mutex poisoned").lines.len()
+        self.inner
+            .lock()
+            .expect("RawConsole mutex poisoned")
+            .lines
+            .len()
     }
 
     /// `true` if no lines have been retained.

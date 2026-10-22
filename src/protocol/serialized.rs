@@ -1,13 +1,23 @@
 //! `LogMode::Serialized` — COBS-framed postcard wire decoder.
 //!
-//! Each CSI packet arrives as one `0x00`-terminated COBS-encoded record.
-//! Inside the record is a `postcard`-serialized `CSIDataPacket` whose
-//! field order matches `esp-csi-rs/src/lib/csi.rs`. Two distinct
-//! schemas exist on the wire — classic chips (ESP32 / C3 / S3) and the
-//! ESP32-C5 / C6. Both end with `csi_data: Vec<i8, 612>`.
+//! Every record on the serialized stream is one `0x00`-terminated COBS
+//! frame. Three things can be inside:
+//!
+//! - **Wire v1** (esp-csi-rs 0.12+, esp-csi-cli-rs 0.9+): a postcard
+//!   [`wire::Envelope`] followed by a [`wire::Body`], decoded with the
+//!   vendored [`crate::protocol::wire`] module. A run opens with one
+//!   `Body::Session` announcement, then `Body::Csi` measurements.
+//! - **Legacy** (esp-csi-rs ≤ 0.11): a bare postcard `CSIDataPacket`,
+//!   whose layout depends on the chip (classic vs ESP32-C5 vs ESP32-C6).
+//!   Kept so firmware 0.7–0.8 still decodes.
+//! - **Log text**: the firmware brackets log lines as `\0 <text> \0` so
+//!   they arrive as their own frame. [`decode_frame`] hands them back as
+//!   [`DecodedFrame::Text`] for the console instead of counting them as
+//!   decode failures.
 
 use crate::data::CsiData;
 use crate::protocol::info::ChipFamily;
+use crate::protocol::wire;
 use serde::{Deserialize, Serialize};
 
 /// Mirror of `esp_csi_rs::time::DateTime` (all `u64`, varint-encoded by
@@ -120,6 +130,7 @@ impl From<CsiPacketClassic> for CsiData {
             sig_len_extra: 0,
             data_length: w.csi_data_len as u32,
             csi_raw_data: csi_i32,
+            ..CsiData::default()
         }
     }
 }
@@ -250,6 +261,173 @@ impl From<CsiPacketC6> for CsiData {
             w.csi_data,
         )
     }
+}
+
+/// One decoded serialized-stream frame. See the module docs.
+#[derive(Debug, Clone)]
+pub enum DecodedFrame {
+    /// A CSI measurement.
+    Csi(Box<CsiData>),
+    /// The announcement a wire-v1 node emits at the start of each run.
+    Session(SessionAnnounce),
+    /// A bracketed firmware log line.
+    Text(String),
+    /// A wire-v1 frame this GUI understands but cannot plot: a grouped
+    /// (802.11bf) or variation report. Counted, not drawn.
+    Unplottable,
+}
+
+/// The host-side view of a wire-v1 [`wire::SessionInfo`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionAnnounce {
+    /// Base MAC of the announcing node.
+    pub node_id: String,
+    /// The session the run belongs to.
+    pub session_id: u32,
+    /// Chip name as the firmware reports it, e.g. `"esp32c5"`.
+    pub chip: &'static str,
+    /// esp-csi-rs version the firmware was built against.
+    pub crate_version: [u8; 3],
+    /// Wall-clock anchor set with `set-session --epoch`, if any.
+    pub epoch_unix_us: Option<u64>,
+}
+
+/// Why a serialized frame did not decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameError {
+    /// Neither the wire-v1 nor the legacy layout fit.
+    Malformed,
+    /// A wire frame from a newer format version, which this build can't
+    /// read. Update the GUI.
+    UnsupportedVersion(u8),
+}
+
+/// Largest frame treated as a log line.
+const MAX_TEXT_FRAME: usize = 256;
+
+/// `true` when `frame` reads as a firmware log line rather than binary:
+/// short and entirely printable ASCII (plus tab / CR / LF / ESC). A real
+/// CSI frame is hundreds of bytes and full of control bytes, so the two
+/// never collide in practice. Same heuristic as csi-webserver-core.
+pub fn is_text_frame(frame: &[u8]) -> bool {
+    !frame.is_empty()
+        && frame.len() <= MAX_TEXT_FRAME
+        && frame
+            .iter()
+            .all(|&b| (0x20..0x7f).contains(&b) || matches!(b, b'\t' | b'\r' | b'\n' | 0x1b))
+}
+
+/// Decode one serialized-stream frame (the bytes before its `\0`).
+///
+/// Tries, in order: log text, wire v1, then the legacy layout for `chip`.
+/// A frame whose first byte names another wire version is only reported
+/// as [`FrameError::UnsupportedVersion`] when the legacy layout does not
+/// decode either: a legacy frame starts with a MAC, whose first byte can
+/// read as any version.
+pub fn decode_frame(frame: &[u8], chip: ChipFamily) -> Result<DecodedFrame, FrameError> {
+    if is_text_frame(frame) {
+        let text = String::from_utf8_lossy(frame);
+        return Ok(DecodedFrame::Text(
+            text.trim_matches(['\r', '\n']).to_string(),
+        ));
+    }
+    let mut owned = frame.to_vec();
+    match wire::decode_cobs(&mut owned) {
+        Ok((env, wire::Body::Csi(f))) => return Ok(from_wire(&env, f)),
+        Ok((env, wire::Body::Session(info))) => {
+            return Ok(DecodedFrame::Session(SessionAnnounce {
+                node_id: format_mac(&env.node_id),
+                session_id: env.session_id,
+                chip: wire_chip_name(info.chip),
+                crate_version: info.crate_version,
+                epoch_unix_us: info.epoch_unix_us,
+            }));
+        }
+        Err(wire::DecodeError::UnsupportedVersion(v)) => {
+            return decode_cobs_packet(frame, chip)
+                .map(|p| DecodedFrame::Csi(Box::new(p)))
+                .ok_or(FrameError::UnsupportedVersion(v));
+        }
+        Err(_) => {}
+    }
+    decode_cobs_packet(frame, chip)
+        .map(|p| DecodedFrame::Csi(Box::new(p)))
+        .ok_or(FrameError::Malformed)
+}
+
+fn wire_chip_name(c: wire::Chip) -> &'static str {
+    match c {
+        wire::Chip::Esp32 => "esp32",
+        wire::Chip::Esp32S2 => "esp32s2",
+        wire::Chip::Esp32S3 => "esp32s3",
+        wire::Chip::Esp32C3 => "esp32c3",
+        wire::Chip::Esp32C5 => "esp32c5",
+        wire::Chip::Esp32C6 => "esp32c6",
+    }
+}
+
+fn opt_flag(b: Option<bool>) -> u32 {
+    b.map(u32::from).unwrap_or(0)
+}
+
+/// Flatten a wire-v1 measurement into [`CsiData`]. Mirrors
+/// `csi_webserver_core::csi::from_wire`, so a capture reads the same in
+/// both tools.
+fn from_wire(env: &wire::Envelope, f: wire::CsiFrame) -> DecodedFrame {
+    let m = &f.meta;
+    let bytes = match &f.payload {
+        wire::CsiPayload::EspRaw { bytes, .. } => bytes,
+        _ => return DecodedFrame::Unplottable,
+    };
+    let forty = m.bandwidth == Some(wire::Bandwidth::Mhz40);
+    let mut d = CsiData {
+        node_id: format_mac(&env.node_id),
+        session_id: env.session_id,
+        stream_seq: env.stream_seq,
+        mac: f.transmitter().map(|a| format_mac(&a)).unwrap_or_default(),
+        rssi: m.rssi as i32,
+        noise_floor: m.noise_floor as i32,
+        channel: m.channel as u32,
+        timestamp: m.timestamp_us,
+        sig_len: m.sig_len as u32,
+        rx_state: m.rx_state as u32,
+        secondary_channel: match m.secondary {
+            wire::Secondary::Above => 1,
+            wire::Secondary::Below => 2,
+            _ => 0,
+        },
+        sgi: opt_flag(m.sgi),
+        stbc: opt_flag(m.stbc),
+        ant: m.antenna.unwrap_or(0) as u32,
+        mcs: m.mcs.unwrap_or(0) as u32,
+        cwb: forty as u32,
+        bandwidth_mhz: m.bandwidth.map(|b| b.mhz() as u32).unwrap_or(0),
+        not_sounding: opt_flag(m.not_sounding),
+        aggregation: opt_flag(m.aggregation),
+        sequence_number: m.frame_seq.unwrap_or(0) as u32,
+        ppdu: format!("{:?}", m.ppdu),
+        data_length: bytes.len() as u32,
+        csi_raw_data: bytes.iter().map(|v| *v as i32).collect(),
+        ..CsiData::default()
+    };
+    match m.vendor {
+        wire::VendorRx::EspClassic {
+            rate,
+            sig_mode,
+            smoothing,
+            fec_ldpc,
+            ampdu_cnt,
+        } => {
+            d.rate = rate as u32;
+            d.sig_mode = sig_mode as u32;
+            d.smoothing = smoothing as u32;
+            d.fec_coding = fec_ldpc as u32;
+            d.ampdu_cnt = ampdu_cnt as u32;
+        }
+        wire::VendorRx::EspHe { rate, .. } => d.rate = rate as u32,
+        wire::VendorRx::None => {}
+    }
+    DecodedFrame::Csi(Box::new(d))
 }
 
 fn format_mac(b: &[u8; 6]) -> String {

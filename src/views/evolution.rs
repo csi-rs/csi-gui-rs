@@ -7,7 +7,7 @@
 //! window. Good for spotting slow drifts, motion bursts, and trends
 //! that get lost inside a heatmap row.
 
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use egui::Color32;
 use egui_plot::{Legend, Line, Plot, PlotPoints, VLine};
 
@@ -73,9 +73,20 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         ui.separator();
         ui.label("Window:");
         ui.add(egui::Slider::new(&mut window, 16..=2000).logarithmic(true));
+        if ctx.devices.len() > 1 {
+            ui.separator();
+            ui.checkbox(&mut ctx.view_state.evolution_compare, "Compare devices")
+                .on_hover_text("Overlay every device's curve, each in its colour");
+        }
     });
     ctx.view_state.evolution_window = window;
     ctx.view_state.evolution_metric = metric;
+
+    let compare = ctx.view_state.evolution_compare && ctx.devices.len() > 1;
+    if compare {
+        render_compare(ui, ctx, metric, window);
+        return;
+    }
 
     let stats = ctx.history.window_ending_at(ctx.view_anchor(), window);
     if stats.len() < 2 {
@@ -121,7 +132,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         .show(ui, |plot_ui| {
             plot_ui.line(
                 Line::new(metric.label(), pts)
-                    .color(Color32::from_rgb(110, 200, 255))
+                    .color(ctx.device_color)
                     .width(1.6_f32),
             );
             // Horizontal-mean reference line via two-point polyline so
@@ -138,8 +149,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             );
             if let Some(anchor) = ctx.view_anchor() {
                 plot_ui.vline(
-                    VLine::new("replay", anchor as f64)
-                        .color(Color32::from_rgb(220, 180, 60)),
+                    VLine::new("replay", anchor as f64).color(Color32::from_rgb(220, 180, 60)),
                 );
             }
         });
@@ -158,6 +168,61 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                 .small(),
         );
     });
+}
+
+/// Every device's curve on one plot, x = global tick id so the devices
+/// line up in time.
+fn render_compare(
+    ui: &mut egui::Ui,
+    ctx: &mut ViewCtx<'_>,
+    metric: EvolutionMetric,
+    window: usize,
+) {
+    let anchor = ctx.view_anchor();
+    let curves: Vec<(String, Color32, Vec<[f64; 2]>)> = ctx
+        .devices
+        .iter()
+        .filter_map(|d| {
+            let stats = d.history.window_ending_at(anchor, window);
+            if stats.len() < 2 {
+                return None;
+            }
+            let ys = compute_curve(metric, &stats);
+            let pts = stats
+                .iter()
+                .zip(ys)
+                .map(|(s, y)| [s.id as f64, y as f64])
+                .collect();
+            Some((d.label.clone(), d.color, pts))
+        })
+        .collect();
+    if curves.is_empty() {
+        ui.centered_and_justified(|ui| ui.label("Waiting for CSI…"));
+        return;
+    }
+    Plot::new("evolution_compare_plot")
+        .height(super::plot_height(ctx.plot_budget))
+        .legend(Legend::default())
+        .x_axis_label("tick (100 ms)")
+        .y_axis_label(metric.y_label())
+        .auto_bounds([true, true])
+        .allow_zoom(false)
+        .allow_drag(false)
+        .allow_boxed_zoom(false)
+        .allow_scroll(false)
+        .show(ui, |plot_ui| {
+            for (label, color, pts) in curves {
+                plot_ui.line(
+                    Line::new(label, PlotPoints::from(pts))
+                        .color(color)
+                        .width(1.6_f32),
+                );
+            }
+            if let Some(a) = anchor {
+                plot_ui
+                    .vline(VLine::new("replay", a as f64).color(Color32::from_rgb(220, 180, 60)));
+            }
+        });
 }
 
 /// Reduce one window of `NetworkStats` to a single scalar per packet

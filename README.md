@@ -1,208 +1,231 @@
 # csi-gui-rs
 
-**A high-resolution desktop GUI for live ESP32 Wi-Fi Channel-State-Information (CSI) capture and analysis.**
+**A desktop GUI for live Wi-Fi Channel State Information (CSI) from one or many ESP32 boards.**
 
-![csi-gui-rs preview](images/gui-preview.png)
+[![CI](https://github.com/csi-rs/csi-gui-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/csi-rs/csi-gui-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/csi-gui-rs.svg)](https://crates.io/crates/csi-gui-rs)
+[![docs.rs](https://docs.rs/csi-gui-rs/badge.svg)](https://docs.rs/csi-gui-rs)
 
-Plug an ESP32 running [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) into your laptop, run `csi-gui-rs`, and watch the radio channel in real time — magnitude, phase, I/Q scatter, channel impulse response, a phase-Δ spectrogram, and a long-window CSI evolution curve — all updating live, all scrubbable, and exportable to **CSV / JSONL / Parquet** or [Rerun](https://rerun.io) RRD for offline work. Previously-exported captures can be imported back into the GUI for replay.
+![csi-gui-rs with five ESP32s: an ESP-NOW pair and three sniffers](https://raw.githubusercontent.com/csi-rs/csi-gui-rs/main/images/gui-preview.png)
 
-The preview above is what `Load Template → showcase` opens — five panes covering Magnitude / Phase heatmaps, Spectrogram, Dashboard, and Evolution.
+Plug in ESP32s running [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs), run
+`csi-gui-rs`, and watch the channel live on every board at once: magnitude, phase, I/Q,
+channel impulse response, a spectrogram and long-window evolution curves. Configure each board
+from typed forms, start them all under one measurement session, record every packet to disk,
+and export to CSV / JSONL / Parquet or [Rerun](https://rerun.io).
 
----
-
-## What problem does it solve?
-
-CSI is a goldmine for Wi-Fi sensing — gesture detection, presence sensing, channel diagnostics, indoor localization — but the tooling is painful. You either get raw byte dumps over UART, terminal-only TUIs that flicker at 5 fps, or one-off Python notebooks that need ten lines of glue before you can see a packet.
-
-`csi-gui-rs` is the *immediate-feedback* layer that's been missing:
-
-- **One command** to identify the firmware, reset the chip, and start streaming.
-- **High-resolution 2D plots** with axes, zoom, pan, and tooltips — not terminal art.
-- **All four firmware log modes** (`text`, `array-list`, `serialized`, `esp-csi-tool`) decode to a single in-memory schema, so the visualizations look identical no matter which wire format you pick.
-- **Ten built-in visualizations** that cover the workflow from "is anything moving?" to "what does subcarrier 24's phase look like across the last 400 packets?"
-- **Live preprocessing pipeline** with Interpolation, Denoising, Detrending, and Feature-Scaling stages baked into newly captured packets — toggling a filter never retroactively rewrites the past.
-- **Replay any moment** with a global timeline scrubber — every pane jumps back together.
-- **Export to CSV, JSONL, or Parquet** for pandas / MATLAB / Spark, or to **Rerun** for time-anchored, scrubbable offline analysis. **Import** any of those formats back into the GUI to replay an old capture without an ESP plugged in.
-- **A console pane** that shows the raw firmware UART, so you're never wondering why nothing's showing up.
-
-It's the difference between *running an experiment* and *debugging your tooling*.
+The screenshot is a Raspberry Pi 4 driving five boards: two ESP32-C5s as an ESP-NOW
+initiator / responder pair, and two ESP32-S3s and a classic ESP32 sniffing the same channel,
+each pane bound to a different board.
 
 ---
 
-## Features
+## Highlights
 
-- **Auto-connect** to the first available serial port, with hardware DTR/RTS reset, banner identification, and graceful handling of hot-unplugs.
-- **Auto config sync** — on every connect the GUI's full `EspConfig` is pushed to the firmware, so the device's wire format (default `LogMode::Serialized`) matches what the host expects from the very first packet.
-- **Mode-aware device config panel** — the full `set-*` surface as typed dropdowns, toggles, and numeric fields. Rows that don't apply to the selected Wi-Fi mode are greyed out (STA/AP credentials, the peer MAC, HT40, reporting), and the channel field is hidden entirely in Station mode (the AP assigns it). See [Device configuration](#device-configuration).
-- **All firmware log modes decode**: `text`, `array-list`, `serialized` (COBS-framed postcard — both classic-chip and ESP32-C5/C6 schemas), and `esp-csi-tool` (Hernandez 26-column CSV).
-- **Live visualizations** (any of which can be split into multiple tiles side-by-side; every pane carries a large `#N` id badge for keyboard focus shortcuts 1..9 / 0):
-  - **Dashboard** — PPS, SNR, RSSI, firmware status at a glance.
-  - **Magnitude** — `|H(k)|` vs subcarrier (DC-centered), linear or dB, with three display modes: per-packet traces, mean ± σ envelope, or subcarrier × time **heatmap**.
-  - **Phase** — raw / unwrapped / detrended, with the same three display modes (heatmap uses a diverging colormap for signed quantities).
-  - **Polar** — current frame as a polar amplitude diagram.
-  - **CIR** — channel impulse response (IDFT) over the last *N* packets, faded by age.
-  - **Spectrogram** — phase-Δ or amplitude over time, smooth viridis colormap.
-  - **Evolution** — long-window time series of a single scalar per packet: mean `|H|`, std-dev of `|H|` across subcarriers, frame-to-frame Δ`|H|` (textbook motion proxy), or RSSI. Auto-follows the head of the stream.
-  - **I/Q scatter** — every (I, Q) sample for the last *N* packets, density via alpha overlap.
-  - **Console** — raw UART text capture with command echo for visibility into the firmware.
-  - **Replay** — global timeline scrubber + play/pause + speed.
-- **Preprocessing pipeline** (Preprocessing… in the **M** menu): four stages applied at capture time so the past stays immutable:
-  - **Interpolation** — Linear / Nearest-Neighbour
-  - **Denoising & filters** — Rolling mean, Rolling median, Savitzky–Golay, Hampel (MAD), Butterworth low-pass, Wavelet DWT (Haar), FFT delay (CIR multipath removal)
-  - **Detrending** — Least-Squares Baseline / Moving-Average Trend
-  - **Feature Scaling** — Min-Max / Z-Score / Quantize
-  - Segmentation (activity gating) is planned for a follow-up release.
-  All stages preserve packet cardinality.
-- **Tiling layout** — split panes horizontally / vertically, fullscreen one, save the whole workspace (layout + theme + preprocessing config + per-pane view knobs) as a named template.
-- **Theme picker** (5 built-in: Dark, Light, Nordic, Gruvbox, Catppuccin). Pick directly from the menu, or press **T** to cycle.
-- **Global replay** — scrubber + play / pause + speed; every pane follows the same anchor.
-- **Optional JSONL recording** — enable **Record to JSONL** in the ESP panel before Start to stream every post-preprocess packet to `exports/<port>_<time>.jsonl`. RAM holds only a bounded tick window for plots (`--history-size`).
-- **Multi-format export** (`Export Data` in the menu) — re-export imported captures to **CSV**, **JSONL**, or **Parquet**, or view the path of the last auto-recording.
-- **Multi-format import** (`Import Data (Replay)`) — load any of the three exported formats back into history. The GUI snaps into replay mode so you can scrub through an old capture without hardware. Disabled while a live collection is in progress.
-- **Rerun integration** *(optional `--features rerun`)* — spawn a viewer, connect to a running one, or save `.rrd` files for offline replay. UI is hidden in the no-feature build, so it never clutters the menu when you don't need it.
-- **Bundled symbol font** — Adwaita Sans Regular (SIL OFL 1.1) is shipped as a last-resort font fallback so Unicode arrows, ▶, ● and friends render correctly out of the box.
+- **Many boards, one window.** Every board gets its own reader, history, preprocessing and
+  recorder. Attach them one by one, or let **Auto-attach** pick up every ESP32 as it is
+  plugged in. Each board is named by its MAC, so it keeps its alias, colour and config across
+  replugs and USB re-enumeration.
+- **Start all, in sync.** One click (or `S`) starts every ticked board under a shared
+  session id and wall-clock epoch (`set-session`), so frames from different boards line up.
+  ESP-NOW pairing is one click too.
+- **Per-pane device binding.** Each pane follows the selected device or is pinned to one; put
+  board A's magnitude next to board B's. The **Devices** view tabulates every board (state,
+  pps, decode rate, frames lost / dropped, session), and **Evolution → Compare devices**
+  overlays them.
+- **The whole 0.10 firmware surface** as a form that only shows what applies to the chosen
+  mode and chip: the nine 802.11bf modes, threshold / decimate reporting, report-to,
+  HE20 and `ax` on the C5/C6, AP leases and burst flood, emitter period and interface, the
+  CSI filter, the classic and C5/C6 acquisition flags and the `he20` preset.
+- **Every log mode decodes**: `serialized` (the esp-csi-rs wire-v1 format, plus the pre-0.12
+  layout), `array-list` (with the transmitter MAC), `text` and `esp-csi-tool`. Firmware log
+  lines go to a console instead of counting as decode failures; gaps in the frame counter
+  are reported as lost frames.
+- **Ten visualizations** in a tiling layout: Dashboard, Devices, Magnitude, Phase, Polar,
+  CIR, Spectrogram, Evolution, I/Q scatter, Console, plus a Replay scrubber that moves every
+  pane together.
+- **Live preprocessing**: interpolation, denoising (rolling mean / median, Savitzky–Golay,
+  Hampel, Butterworth, DWT, FFT delay), detrending and feature scaling, applied as packets
+  arrive.
+- **Self-healing.** Unplug a board, reboot it, or let its firmware crash mid-run: it is
+  re-identified, re-configured and resumes the run under the same session, on whatever
+  port it comes back on.
+- **Quality of life**: Ctrl+K command palette, toasts instead of modal pop-ups, a
+  firmware-problem card that says what to do, workspace saved between launches, and
+  templates.
+- **No hardware?** `--simulate=N` adds N simulated boards that speak the real protocol.
+- **Headless check**: `csi-gui-rs probe` identifies, configures, collects and reports per
+  board from a terminal; handy over SSH and in CI.
+
+---
+
+## Compatibility
+
+| csi-gui-rs | esp-csi-cli-rs | CLI protocol | Serialized format |
+|---|---|---|---|
+| **2.0** | **0.10.x** (recommended), 0.9 | 4, 3 | wire v1 (esp-csi-rs 0.12+); the pre-0.12 layout still decodes |
+| 1.2 | 0.10.0 | 4 | pre-0.12 only, so serialized mode fails on 0.10 firmware |
+| 1.1 | 0.8 | 3 | pre-0.12 |
+
+Chips: ESP32, ESP32-S3, ESP32-C3, ESP32-C5, ESP32-C6. Tested on hardware with
+esp-csi-cli-rs 0.10.1 on the ESP32 (CH340, UART), ESP32-S3 and ESP32-C5 (native USB).
+Use the plain-text firmware build: a `defmt` build (`info` says `log=defmt`) is refused
+with an explanation.
 
 ---
 
 ## Install
 
-Prerequisites:
-- Rust ≥ 1.85 (stable), edition 2024.
-- An ESP32 (any variant — esp32, c3, c5, c6, s3) flashed with [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) 0.10.0 or later (CLI `protocol=4`).
-- A USB-UART connection. Linux users need read/write on `/dev/ttyUSB*` (usually via the `dialout` group).
+**Prebuilt binaries** for Linux (x86_64, aarch64 / Raspberry Pi), Windows and macOS are on
+the [releases page](https://github.com/csi-rs/csi-gui-rs/releases).
 
-From source:
+**From crates.io** (Rust 1.92 or newer):
+
 ```sh
-git clone <this repo>
+cargo install csi-gui-rs                     # the GUI
+cargo install csi-gui-rs --features rerun    # with the Rerun sink
+```
+
+**From source:**
+
+```sh
+git clone https://github.com/csi-rs/csi-gui-rs
 cd csi-gui-rs
 cargo run --release
 ```
 
-With Rerun support:
-```sh
-cargo run --release --features rerun -- --rerun=spawn
-```
+### Platform notes
 
-The release profile maximises optimisation — `opt-level=3` + `lto="fat"` + `panic="abort"` + `strip=true` for the crate and every dependency, plus build scripts kept at `opt-level=0` so compile times don't tank.
+- **Linux**: needs `libudev` (Debian / Ubuntu: `sudo apt install libudev-dev pkg-config`,
+  Fedora: `sudo dnf install systemd-devel`). Add yourself to the serial group so the ports
+  open without root: `sudo usermod -aG dialout $USER` (Arch: `uucp`), then log in again.
+  X11 and Wayland both work.
+- **Windows**: install the [CH340](https://www.wch-ic.com/downloads/CH341SER_EXE.html) or
+  [CP210x](https://www.silabs.com/developers/usb-to-uart-bridge-vcp-drivers) driver if your
+  board has a USB-UART bridge; native-USB boards (S3, C3, C5, C6) need none.
+- **macOS**: boards show up as `/dev/cu.usbmodem…` (native USB) or `/dev/cu.usbserial…`.
+
+### Flashing the firmware
+
+Build and flash [`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs) for your chip
+(see its README), e.g. for an ESP32-S3:
+
+```sh
+cargo run --release --features esp32s3 --target xtensa-esp32s3-none-elf
+```
 
 ---
 
 ## Quick start
 
-1. Plug the ESP32 into a USB port.
-2. `cargo run --release`
-3. The GUI opens, auto-detects the port, resets the device, identifies the firmware, and lands on the Dashboard.
-4. Click **ESP → Start Collection** (or pick *Start Collection* from the **M** menu — disabled until a recognised device is identified).
-5. Hit **Enter** to switch the focused pane to **Magnitude**, **Phase**, **Spectrogram**, **Evolution**, or any other view. Use **Shift+Arrow** to split the pane and show multiple views side-by-side.
-6. Press **Enter → Replay** to add a scrubber pane. Drag the slider; all live panes rewind together. Press **R** to snap back to LIVE.
-6. **▶ Start Collection** in the ESP panel begins capture. Optionally check **Record to JSONL** first to save the full per-packet stream under `exports/`. Plots use the in-memory tick window only.
-7. **M → Export Data** — shows the last session recording path, or re-exports an **imported** capture to CSV/JSONL/Parquet.
-8. **M → Import Data (Replay)** loads a JSONL/CSV/Parquet file into history for replay (requires that collection is stopped).
-
 ```sh
-# Common flags:
-csi-gui-rs --baud=115200                 # default
-csi-gui-rs --history-size=5000           # tick window for plots/replay (~8 min at 10 Hz)
-csi-gui-rs --rerun=spawn                 # launch a Rerun viewer
-csi-gui-rs --rerun=file:logs/run1.rrd    # record to an RRD file
-csi-gui-rs --help
+csi-gui-rs                         # open the GUI; add boards from the Devices panel
+csi-gui-rs --auto-attach           # attach every ESP32 port, now and as they appear
+csi-gui-rs /dev/ttyACM0 /dev/ttyUSB0
+csi-gui-rs --simulate=3            # three simulated boards, no hardware
+csi-gui-rs -a --start-all          # unattended: attach everything and start collecting
 ```
+
+Then:
+
+1. Boards appear in the **Devices** panel on the right as they identify. Click one to edit
+   its configuration, rename it, or pair it over ESP-NOW with another.
+2. Press **Apply** (or **Apply all**). New boards get their config pushed automatically.
+3. Press **▶ Start all** (or `S`). Tick **Record** first to keep every packet on disk.
+4. Use each pane's device picker to choose what it shows; add a **Devices** pane for the
+   overview.
+
+### Command-line options
+
+```
+csi-gui-rs [options] [PORT...]          open the GUI
+csi-gui-rs probe [options] [PORT...]    headless check: identify, collect, report
+
+  PORT, -p PORT, --port=PORT   serial port to open (repeatable)
+  -a, --auto-attach            open every ESP32-looking port, now and as they appear
+  --simulate=N                 add N simulated esp-csi-cli-rs devices
+  --start-all                  start every device as soon as it is ready
+  -b N, --baud=N               baud for UART-bridged boards (default 115200)
+  --history-size=N             plot/replay window in 100 ms ticks (default 10000)
+  --data-dir=DIR               where exports, recordings and .rrd files go
+  --rerun=MODE                 off | spawn | connect[:host:port] | file:PATH
+
+probe options:
+  --seconds=N  --channel=N  --log-mode=MODE  --esp-now-pair  --record
+```
+
+### Headless probe
+
+```console
+$ csi-gui-rs probe --seconds=10 --channel=6 --esp-now-pair /dev/ttyACM0 /dev/ttyACM2 /dev/ttyACM1 /dev/ttyACM3 /dev/ttyUSB0
+port          mac                firmware                                mode               frames    pps  dec%  lost  session   sc
+/dev/ttyACM0  10:BD:A3:CA:34:98  esp-csi-cli-rs 0.10.1 · esp32c5 · proto 4 esp-now-initiator   1601  160.1 100.0     0 0cea5939  53  OK
+/dev/ttyACM2  38:44:BE:1F:FE:18  esp-csi-cli-rs 0.10.1 · esp32c5 · proto 4 esp-now-responder    882   88.2 100.0     0 0cea5939  53  OK
+/dev/ttyACM1  A0:85:E3:F5:48:90  esp-csi-cli-rs 0.10.1 · esp32s3 · proto 4 sniffer             4264  426.4 100.0     0 0cea5939  64  OK
+/dev/ttyACM3  A0:85:E3:F5:3F:58  esp-csi-cli-rs 0.10.1 · esp32s3 · proto 4 sniffer             1697  169.7 100.0     0 0cea5939  64  OK
+/dev/ttyUSB0  78:42:1C:69:39:9C  esp-csi-cli-rs 0.10.1 · esp32 · proto 4   sniffer              322   32.2 100.0     0 0cea5939 128  OK
+all collecting devices share session 0cea5939
+```
+
+The exit status is 0 when every board identified and delivered decodable CSI.
 
 ---
 
 ## Device configuration
 
-The ESP panel's **Configuration** section is a typed front-end for the firmware's
-`set-*` command surface. Every field maps 1:1 to a command that
-[`esp-csi-cli-rs`](https://github.com/csi-rs/esp-csi-cli-rs)
-understands; edits stay local until you press **Save & Apply**, which validates
-the whole config and pushes it to the device in one batch.
+The **Configuration** form is a typed front-end for the firmware's `set-*` commands. It only
+shows what the chosen **mode** and the board's **chip** use, so a sniffer has no softAP rows
+and an S3 has no C5/C6 acquisition flags. Hover a row's label for what it does. Edits stay
+local until **Apply**, which validates them for that chip (5 GHz channels only on the C5,
+`ax` and HE20 only on the C5/C6, a sniffer can't report `none`, …) and pushes them.
 
-**The node model.** The **Wi-Fi Mode** selector sets a node's mode, and the
-**Reporting** row sets whether it reports its CSI to the host where the mode
-admits a choice. Names follow IEEE 802.11bf (session role initiator/responder,
-sensing role, reporting); the model is documented in
-[`esp-csi-rs/docs/network-model.md`](https://github.com/csi-rs/esp-csi-rs/blob/main/docs/network-model.md).
+| Mode | What the node does | Mode-specific rows |
+|---|---|---|
+| `sniffer` | passive monitor on one channel | reporting |
+| `station` | joins an AP, captures from its traffic | SSID, password, reporting, periodicity |
+| `wifi-ap` | runs a softAP and floods its stations | SSID, password, DHCP, leases, burst flood, HT40, reporting |
+| `ht20-emitter`, `ht40-emitter` | injects frames, captures none | peer MAC (destination), inject period, interface, HE20 |
+| `esp-now-initiator` / `-responder` | an ESP-NOW pair | peer MAC, HT40, HE20, reporting, periodicity, PHY rate |
+| `esp-now-simplex-source` / `-peer` | a one-way flood and its receiver | peer MAC (HT40 on the source) |
 
-**Mode-aware fields.** Selecting a **Wi-Fi Mode** reshapes the panel so you only
-see knobs that take effect:
+**Reporting** (`set-reporting`): `report` every measurement, `none`, `threshold` (802.11bf
+threshold-based: only while the channel moves, with a level and hold time) or `decimate`
+(every n-th), sent to the `host` (this GUI) or kept `local` on the device.
 
-- **Station** — STA SSID / password and **Reporting** are enabled; the
-  **Channel** field is *hidden*, because the channel follows the associated AP
-  (the GUI omits `set-wifi --set-channel` in this mode).
-- **Wi-Fi AP** — AP SSID / password / DHCP, the **HT40** secondary channel and
-  **Reporting** are enabled.
-- **Sniffer** — always reports; credentials, **Peer MAC**, **HT40** and
-  **Reporting** are greyed out.
-- **ht20-emitter** / **ht40-emitter** — **Peer MAC** is enabled as the injection
-  destination (blank injects to broadcast). Bandwidth comes from the mode
-  itself, so there is no separate bandwidth knob.
-- **esp-now-initiator** / **esp-now-responder** — **Peer MAC** (the explicit
-  peer; blank pairs automatically, and when set it must be set on both nodes),
-  **HT40** (forces the per-peer TX PHY) and **Reporting** are enabled.
-  This pair is also the only place **PHY Rate** is applied; elsewhere it is
-  reporting only.
-- **ESP-NOW simplex source** / **peer** (`esp-now-simplex-source` /
-  `esp-now-simplex-peer`) — reporting is fixed by the end: the source floods
-  and reports nothing, the peer measures and reports. Both take **Peer MAC**;
-  the source also takes **HT40**.
-
-**Reporting.** The **Reporting** row maps to
-`set-wifi --reporting=report|none` (needs esp-csi-cli-rs 0.10.0 or later) and
-is only sent for the modes above that admit a choice. `report` sends the CSI
-to the host; `none` still measures, it just reports nothing.
-
-**Periodicity.** The **Periodicity (Hz)** row and the **Unsolicited** toggle map
-to `set-measurement --periodicity-hz=N --unsolicited=on|off`.
-
-**CSI output.** The **CSI Output** row maps to `set-csi-output --enabled=`
-(default on), the runtime delivery gate. Turning it off keeps the radio capturing — the RX path and its
-timing are unchanged — but nothing is decoded, logged, or delivered off-device.
-Use it for a node whose only job is to keep traffic on air. It has no effect on
-an emitter, which captures nothing.
-
-**Acquisition presets.** The **CSI preset** row is only shown when a build
-installs a [`CsiProfile`](src/protocol/profile.rs) that offers presets; this
-crate names none of its own. A profile resolves a preset name into the single
-`set-csi --preset=<name>` line to push and folds it into the panel's individual
-toggles, so extra acquisition layouts can be added out-of-tree without touching
-the open surface.
-
-**Buttons.**
-
-- **Save & Apply** — validate + push the full config (SSID length, MAC format,
-  channel range, value-scale bounds). Disabled hints appear while a collection is
-  running; stop first.
-- **Reset to defaults** — send `reset-config` to restore the firmware defaults.
-- **Advanced** — fire raw `show-config`, `show-stats`, and `info` commands and
-  read the replies in the Console pane.
+**Multi-device helpers**: **Copy to…** copies a config (except the peer MAC) to other boards
+and applies it; **ESP-NOW pairing** makes the selected board the initiator and another the
+responder on one channel, each with the other's MAC; **Apply all** pushes every board's own
+config.
 
 ---
 
-## Export / import file layout
+## Files
 
-All three export formats use the same schema. Pick whichever your downstream tooling reads:
+Everything lives in the platform's standard directories (override the data side with
+`--data-dir`):
 
-| Format    | Extension(s)         | What's in the file                                                                 |
-|-----------|----------------------|-------------------------------------------------------------------------------------|
-| CSV       | `.csv`               | Hernandez 23-column schema. `csi_raw_data` is a space-separated `[…]` list.        |
-| JSONL     | `.jsonl`/`.json`/`.ndjson` | One `CsiData` per line. Native `serde` representation — round-trips losslessly. |
-| Parquet   | `.parquet`/`.pq`     | Snappy-compressed, same 23 columns. `csi_raw_data` stored as a UTF-8 string column.|
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Config: templates, `devices.json` | `~/.config/csi-gui-rs` | `~/Library/Application Support/io.csi-rs.csi-gui-rs` | `%APPDATA%\csi-rs\csi-gui-rs\config` |
+| Data: `exports/`, `rrd/` | `~/.local/share/csi-gui-rs` | same as config | `%APPDATA%\csi-rs\csi-gui-rs\data` |
 
-The importer auto-detects the format from the extension. Unknown extensions fall back to CSV.
+**Recordings.** With **Record** ticked, each collecting board streams every packet (after
+preprocessing) to `exports/<name>_<session>_<time>.jsonl`.
 
----
+**Export** (File → Export captures…) writes one file per board in CSV, JSONL or Parquet, from
+its last recording (every packet) or, without one, the in-memory history (one averaged packet
+per 100 ms tick). **Import** opens a capture as a read-only replay device next to the live ones.
 
-## Templates
+All three formats share one schema: `device`, `host_time_us`, `node_id`, `session_id`,
+`stream_seq`, `sequence_number`, `mac` (transmitter), `rssi`, `rate`, `noise_floor`, `channel`,
+`secondary_channel`, `bandwidth_mhz`, `ppdu`, `timestamp`, the 802.11 receive metadata,
+`data_length`, `subcarriers` and `csi_raw_data` (interleaved values as the firmware sent them;
+`[…]` space-separated in CSV and Parquet). Columns are matched by name on import, so files
+written by 1.x still load.
 
-Templates are JSON files written under `templates/` (relative to your working directory). Each template captures the **complete workspace**:
-
-- the tiling layout (panes, splits, focused id),
-- the active theme,
-- the current preprocessing pipeline,
-- every per-pane view-state knob (window sizes, scale toggles, etc.).
-
-Reloading a template restores all of the above. One template per directory can be marked default — on next launch it loads automatically. Old template files written before this rewrite (bare `TilingManager`) still load; missing fields default to "off".
+**Templates** (File → Save / Load template) store the whole workspace: layout, pane views and
+device bindings, theme and preprocessing. Mark one as default to load it at startup; otherwise
+the last session's workspace comes back.
 
 ---
 
@@ -210,22 +233,44 @@ Reloading a template restores all of the above. One template per directory can b
 
 | Key | Action |
 | --- | --- |
+| `Ctrl+K` | Command palette (every action, searchable) |
+| `S` | Start all / stop all |
+| `D` | Toggle the device panel |
+| `H` / `F1` | Help |
 | `M` | Main menu |
-| `H` | Help overlay |
-| `Enter` | Pick the view type for the focused pane |
-| `Tab` | Cycle focused pane |
+| `Enter` | Pick the view for the focused pane |
+| `Tab`, `1..9`, `0` | Focus next pane / pane by id |
 | `Space` | Fullscreen the focused pane |
-| `Shift+←/→` / `Shift+↑/↓` | Split the focused pane |
+| `Shift+←/→`, `Shift+↑/↓` | Split the focused pane into columns / rows |
 | `Delete` | Close the focused pane |
-| `←/→` | Step the global replay anchor |
-| `R` | Cancel replay, snap to LIVE |
-| `T` | Cycle theme (the **M** menu also has a direct picker) |
-| `1..9, 0` | Focus pane by id |
-| `Shift+R` | Toggle Rerun live streaming *(with `--features rerun`)* |
-| `Shift+L` | Toggle Rerun RRD recording *(with `--features rerun`)* |
+| `←` / `→` | Step the replay anchor |
+| `R` | Back to live |
+| `T` | Cycle theme |
+| `Q` | Quit |
+| `Shift+R`, `Shift+L` | Rerun live streaming / RRD recording *(with `--features rerun`)* |
 
 ---
 
+## Library use
+
+The crate is also a library: the device manager, reader, decoders (including the vendored
+esp-csi-rs [`wire`](src/protocol/wire) contract) and capture formats can be used without the
+GUI. See the [crate docs](https://docs.rs/csi-gui-rs).
+
+## Development
+
+```sh
+cargo test                          # unit tests, simulated-device tests, real-firmware fixtures
+cargo clippy --all-targets --all-features -- -D warnings
+scripts/sync-wire.sh ../esp-csi-rs  # re-vendor the wire module after an esp-csi-rs release
+cross build --release --target aarch64-unknown-linux-gnu   # Raspberry Pi build
+```
+
+Release notes are in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
-Dual-licensed under MIT or Apache-2.0, at your option. The bundled Adwaita Sans font is SIL OFL 1.1 — see `assets/fonts/LICENSE-AdwaitaSans`.
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. The
+bundled Adwaita Sans font is SIL OFL 1.1 (`assets/fonts/LICENSE-AdwaitaSans`). The vendored
+`src/protocol/wire/` module comes from [esp-csi-rs](https://github.com/csi-rs/esp-csi-rs)
+under the same terms.

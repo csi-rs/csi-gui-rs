@@ -1,7 +1,7 @@
 use super::csi::CsiData;
-use super::stats::{NetworkStats, GRID_SIZE};
+use super::stats::{GRID_SIZE, NetworkStats};
 use std::collections::VecDeque;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 /// Default in-memory **tick** window capacity (per [`History::new`]).
 ///
@@ -117,7 +117,25 @@ impl History {
         self.frames_decoded_total = self.entries.len() as u64;
     }
 
-    pub fn push_tick(&mut self, batch: Vec<CsiData>, raw_frames_delta: u64) -> Option<&NetworkStats> {
+    pub fn push_tick(
+        &mut self,
+        batch: Vec<CsiData>,
+        raw_frames_delta: u64,
+    ) -> Option<&NetworkStats> {
+        let id = self.next_id;
+        self.push_tick_at(id, batch, raw_frames_delta)
+    }
+
+    /// [`Self::push_tick`] with the tick id chosen by the caller. The app
+    /// numbers ticks globally and every device's history pushes with the
+    /// same id, so one replay anchor addresses the same moment in all of
+    /// them. Ids must increase.
+    pub fn push_tick_at(
+        &mut self,
+        id: u64,
+        batch: Vec<CsiData>,
+        raw_frames_delta: u64,
+    ) -> Option<&NetworkStats> {
         let decoded: Vec<CsiData> = batch.into_iter().filter(|p| p.is_decoded()).collect();
         let decoded_count = decoded.len();
         self.frames_decoded_total += decoded_count as u64;
@@ -150,10 +168,9 @@ impl History {
         let snr = rssi - nf;
 
         let timestamp_ms = self.started.elapsed().as_millis() as u64;
-        let _ = SystemTime::now().duration_since(UNIX_EPOCH);
 
         let stats = NetworkStats {
-            id: self.next_id,
+            id,
             rssi,
             pps,
             snr,
@@ -161,7 +178,7 @@ impl History {
             csi: avg,
             distribution_grid: [[0.0; GRID_SIZE]; GRID_SIZE],
         };
-        self.next_id += 1;
+        self.next_id = id + 1;
 
         if self.entries.len() == self.cap {
             self.entries.pop_front();
@@ -183,7 +200,14 @@ impl History {
 
     pub fn resolve_anchor(&self, anchor: Option<u64>) -> Option<&NetworkStats> {
         match anchor {
-            Some(id) => self.get(id),
+            // Tick ids are global and a device without packets in a tick
+            // has no entry for it: show its latest entry at or before the
+            // anchor rather than nothing.
+            Some(id) => match self.entries.binary_search_by(|s| s.id.cmp(&id)) {
+                Ok(i) => Some(&self.entries[i]),
+                Err(0) => None,
+                Err(i) => Some(&self.entries[i - 1]),
+            },
             None => self.last(),
         }
     }
@@ -227,6 +251,17 @@ mod tests {
         h.push_tick(batch, 20);
         assert!(h.raw_history.is_empty());
         assert_eq!(h.entries.len(), 1);
+    }
+
+    #[test]
+    fn anchor_falls_back_to_latest_earlier_tick() {
+        let mut h = History::with_capacity(16);
+        h.push_tick_at(10, vec![make_packet(1)], 1);
+        h.push_tick_at(14, vec![make_packet(2)], 1);
+        assert_eq!(h.resolve_anchor(Some(12)).unwrap().id, 10);
+        assert_eq!(h.resolve_anchor(Some(14)).unwrap().id, 14);
+        assert!(h.resolve_anchor(Some(9)).is_none());
+        assert_eq!(h.window_ending_at(Some(13), 5).len(), 1);
     }
 
     #[test]

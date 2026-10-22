@@ -50,10 +50,7 @@ impl ThemePicker {
             .show(ctx, |ui| {
                 for variant in ThemeVariant::ALL {
                     let selected = variant == self.variant;
-                    if ui
-                        .selectable_label(selected, variant.label())
-                        .clicked()
-                    {
+                    if ui.selectable_label(selected, variant.label()).clicked() {
                         self.variant = variant;
                         result = ThemePickerResult::Pick(variant);
                         close = true;

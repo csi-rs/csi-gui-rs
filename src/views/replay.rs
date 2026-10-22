@@ -1,4 +1,4 @@
-use super::{ViewCtx};
+use super::ViewCtx;
 use std::time::Instant;
 
 /// Replay control surface. The actual replay anchor lives on `App::replay`
@@ -40,7 +40,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         } else {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 60),
-                egui::RichText::new(format!("⏵ REPLAY  packet #{anchor}")).size(16.0).strong(),
+                egui::RichText::new(format!("▶ REPLAY  packet #{anchor}"))
+                    .size(16.0)
+                    .strong(),
             );
         }
         ui.label(format!("({pkt_count} captured)"));
@@ -63,7 +65,11 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
 
     ui.horizontal(|ui| {
         // Play / pause
-        let play_label = if ctx.replay.playing { "❚❚ Pause" } else { "▶ Play" };
+        let play_label = if ctx.replay.playing {
+            "❚❚ Pause"
+        } else {
+            "▶ Play"
+        };
         if ui.button(play_label).clicked() {
             if ctx.replay.anchor.is_none() {
                 ctx.replay.anchor = Some(first);
@@ -93,7 +99,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             ctx.replay.playing = false;
             ctx.replay.anchor = Some(first);
         }
-        if ui.button("⏭ Live").clicked() {
+        if ui.button("● Live").clicked() {
             ctx.replay.playing = false;
             ctx.replay.anchor = None;
         }

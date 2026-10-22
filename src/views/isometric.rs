@@ -1,4 +1,4 @@
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use crate::data::dsp::compute_cir;
 use egui::Color32;
 use egui_plot::{Legend, Line, Plot, PlotPoints};

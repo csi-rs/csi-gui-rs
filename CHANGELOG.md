@@ -1,6 +1,102 @@
-# Release Notes
+# Changelog
 
-## 1.2.0
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [2.0.0] - 2026-10-22
+
+Needs esp-csi-cli-rs 0.10.x (CLI protocol 4); 0.9 (protocol 3) is accepted
+with a warning. Tested on hardware with esp-csi-cli-rs 0.10.1 on the ESP32,
+ESP32-S3 and ESP32-C5.
+
+### Added
+
+- **Multiple devices.** Every board gets its own session (reader, history,
+  preprocessing, recorder) and they all capture at once. A device panel lists
+  them with state, pps and per-device Start/Stop; **Start all / Stop all**
+  runs every ticked board under one shared `set-session` id and wall-clock
+  epoch so their frames line up; **Apply all**, **Copy config to…** and
+  one-click **ESP-NOW pairing** cover the common multi-board setups.
+- **Discovery.** Ports are recognised by USB vendor (Espressif, CP210x, CH340,
+  FTDI); **Auto-attach** opens every ESP32 as it appears. Boards are named by
+  MAC, followed across USB re-enumeration, and their alias, colour and config
+  are remembered in `devices.json`.
+- **Per-pane device binding**: each pane follows the active device or is pinned
+  to one. New **Devices** view (all boards in one table) and an Evolution
+  **Compare devices** overlay.
+- **The esp-csi-cli-rs 0.10 command surface**: threshold / decimate reporting
+  with level, hold and n (`set-reporting`), `--report-to`, `set-session`,
+  `set-csi-filter`, `set-protocol ax`, `--he20`, `--ap-leases`, `--ap-burst`,
+  `--inject-period-us`, `--emitter-iface`, the C5/C6 HE acquisition flags and
+  the built-in `he20` preset.
+- `CsiData` carries `device`, `host_time_us`, `node_id`, `session_id`,
+  `stream_seq`, `sequence_number`, `ppdu` and `bandwidth_mhz`, and the export
+  schema has the matching columns.
+- **Command palette** (Ctrl+K), **toasts** for routine events, an inline
+  firmware-problem card, shortcuts `S` (start/stop all) and `D` (device panel).
+- **Simulated devices** (`--simulate=N`, Devices → Add simulated device) that
+  speak the real protocol and wire format.
+- **`csi-gui-rs probe`**: headless identify / configure / collect / report, for
+  SSH sessions and CI.
+- `--port` (repeatable, or bare port arguments), `--auto-attach`,
+  `--start-all`, `--data-dir`, `--version`.
+- Platform config and data directories; the workspace is restored between
+  launches; the showcase template is built in.
+- GitHub Actions CI (Linux, Windows, macOS) and tagged release builds for
+  x86_64 / aarch64 Linux, Windows and macOS.
+
+### Changed
+
+- **Serialized decoding** uses the esp-csi-rs wire-v1 format (`Envelope` +
+  `Body`), vendored from esp-csi-rs 0.13 (`src/protocol/wire`,
+  `scripts/sync-wire.sh`). 1.x decoded only the pre-0.12 layout, so every
+  serialized frame from 0.9+ firmware failed to decode. The old layout is
+  still decoded as a fallback.
+- Firmware log text inside the serialized stream goes to the console instead
+  of counting as a decode failure; `stream_seq` gaps are counted as lost
+  frames and UI back-pressure as dropped frames.
+- Identification asks first (`q`, `info`) and only then resets, which suits
+  native USB-Serial-JTAG boards; a board still streaming a run that a
+  crashed host left behind is reset when `q` can't quiet it.
+- **Automatic recovery.** A board that drops out mid-run comes back by
+  itself: unplugged and replugged, soft-restarted, reset, or rebooted by a
+  firmware panic or watchdog (detected from its boot banner in any log
+  mode). It is re-identified, its config is re-applied, and a run that was
+  going resumes under the same session id. Boards whose `/dev` names swap
+  on re-enumeration are followed by USB serial number. A board that didn't
+  identify is retried every 10 s. Tested on hardware with
+  `examples/recovery_drill.rs`.
+- CLI commands are paced on the firmware prompt. Sent back to back, a full
+  config overflowed the classic ESP32's UART RX FIFO, and esp-csi-cli-rs
+  0.10.1 panics (`Rx(FifoOverflowed)`) and reboots.
+- A run that ends by itself (`start --duration`) is detected.
+- Stop is confirmed: `q` is re-sent while the board keeps streaming, and a
+  board that ignores it (a classic ESP32 whose 115200 UART is saturated
+  doesn't read input) is reset. Commands are serviced within 30 ms even
+  while a stream is busy.
+- The config form only shows rows that apply to the chosen mode and chip,
+  validates per chip, and uses drag values instead of text buffers.
+- `app.rs` split into `app/` modules; new `device`, `paths`, `probe` and
+  `sim` modules. Rerun entities are `csi/<device>/…`.
+- Import opens a capture as a read-only replay device next to the live ones;
+  export writes one file per device from its full recording.
+- MSRV is 1.92 (egui 0.34).
+
+### Removed
+
+- `ESP_CONFIG_FIELDS` and the index-coupled panel rows, the modal firmware
+  warning, `EspSharedState::should_start` / `should_reset`, and the
+  `PhyRate` `*-l` duplicates (old configs still load).
+
+### Fixed
+
+- A serialized frame split across a read timeout is no longer dropped.
+- Live export no longer ends at "Nothing to export".
+- The bundled-template test no longer depends on a git-ignored file.
+
+## [1.2.0]
+
 
 Needs esp-csi-cli-rs 0.10.0 or later (`info` reports `protocol=4`). Older
 firmware is refused at identify with an "unsupported protocol" dialog.
@@ -13,7 +109,7 @@ firmware is refused at identify with an "unsupported protocol" dialog.
   - `set-traffic --frequency-hz=N` → `set-measurement --periodicity-hz=N` (`--unsolicited=on|off` unchanged). `EspConfig::traffic_hz` / `traffic_unsolicited` are `periodicity_hz` / `unsolicited`; the panel rows read **Periodicity (Hz)** and **Unsolicited**.
   - `SUPPORTED_PROTOCOL` is 4.
 
-## 1.1.0
+## [1.1.0]
 
 Needs esp-csi-cli-rs 0.8.0 or later. This release supersedes the mode, peer-MAC,
 HT40 and CSI-output notes under [Operational modes and CSI output](#operational-modes-and-csi-output) below.
@@ -35,7 +131,9 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 
 - **One `WifiProtocol` variant** that `set-protocol` never accepted (it takes `b|g|n|lr|a|ac`). A saved config naming it loads with the default protocol, `lr`.
 
-## CSI decode and firmware identify
+## [1.0.0] and earlier
+
+### CSI decode and firmware identify
 
 ### Fixed
 
@@ -52,7 +150,7 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 - Log mode is re-synced immediately before each Start.
 - Default reader log mode matches firmware boot (`ArrayList`) until `set-log-mode` is applied.
 
-## Memory and recording
+### Memory and recording
 
 ### Added
 
@@ -63,7 +161,7 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 
 - **Long-session performance** — Removed per-packet `raw_history` growth during live capture and stopped copying unused `distribution_grid` snapshots into every tick. `History::get` uses binary search on tick ids.
 
-## Preprocessing
+### Preprocessing
 
 ### Added
 
@@ -76,13 +174,13 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 - Filters apply at capture time only; toggling does not rewrite packets already in history.
 - Segmentation (activity gating) is planned for a follow-up.
 
-## Layout and views
+### Layout and views
 
 ### Fixed
 
 - **Pane overflow when splitting rows/columns** — View content no longer falls off-screen in small tiled panes. The pane body uses the remaining height, scrolls when needed, and plots scale to the available space.
 
-## ESP config panel
+### ESP config panel
 
 ### Fixed
 
@@ -94,7 +192,7 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 - **Enum fields use dropdowns** — Multi-value settings are now `ComboBox` widgets instead of click-to-cycle buttons (Wi-Fi mode, protocol, HT40, log mode, PHY rate, CSI delivery).
 - **Channel hidden in Station mode** — The Channel field is hidden and `set-wifi --set-channel` is omitted when Wi-Fi mode is Station, since the channel follows the associated AP.
 
-## Operational modes and CSI output
+### Operational modes and CSI output
 
 ### Changed
 
@@ -106,13 +204,13 @@ HT40 and CSI-output notes under [Operational modes and CSI output](#operational-
 - **`set-csi` on C5/C6** — Emission is limited to the flags the firmware accepts: `--csi`, `--csi-legacy`, `--csi-ht20`, `--csi-ht40`, `--val-scale-cfg`, `--dump-ack`, plus the C5-only `--csi-force-lltf` / `--csi-vht`.
 - **Serialized data formats** — Wire discriminants 14 and 15 are `Reserved14` / `Reserved15`. The ordinals and the round-trip decode are unchanged; only the labels are neutral.
 
-## Internal
+### Internal
 
 - Removed temporary `agent_debug` NDJSON instrumentation added during the decode investigation.
 - Added `savgol-rs` for Savitzky–Golay filtering.
 - Added `SessionRecorder` (`src/persistence/recording.rs`) for background JSONL writes.
 
-## Verification
+### Verification
 
 - `cargo test` (40 unit tests)
 - `cargo clippy -- -D warnings`

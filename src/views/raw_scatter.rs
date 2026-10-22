@@ -1,4 +1,4 @@
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use egui::Color32;
 use egui_plot::{Legend, Plot, PlotPoints, Points};
 
@@ -34,9 +34,12 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             .filter_map(|s| s.csi.as_ref().map(|c| c.subcarriers()))
             .sum();
         ui.label(
-            egui::RichText::new(format!("{total_subcarriers} points · {} packets", window.len()))
-                .weak()
-                .small(),
+            egui::RichText::new(format!(
+                "{total_subcarriers} points · {} packets",
+                window.len()
+            ))
+            .weak()
+            .small(),
         );
     });
     if requested != window_packets {
@@ -99,7 +102,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             const AGE_BUCKETS: usize = 5;
             let mut buckets: Vec<Vec<[f64; 2]>> = (0..AGE_BUCKETS).map(|_| Vec::new()).collect();
             for (idx, stats) in window.iter().enumerate() {
-                let Some(csi) = stats.csi.as_ref() else { continue };
+                let Some(csi) = stats.csi.as_ref() else {
+                    continue;
+                };
                 let age = n_pkts - 1 - idx;
                 let bucket = (age * AGE_BUCKETS / n_pkts).min(AGE_BUCKETS - 1);
                 let bucket_vec = &mut buckets[bucket];

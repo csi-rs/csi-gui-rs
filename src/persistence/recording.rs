@@ -2,12 +2,12 @@
 //! so the in-memory history can stay a bounded tick window.
 
 use crate::data::CsiData;
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
 const CHANNEL_CAP: usize = 64;
@@ -57,11 +57,16 @@ impl SessionRecorder {
         self.last_error.as_deref()
     }
 
-    /// Open `exports/<label>_<unix>.jsonl` and spawn the writer thread.
-    pub fn start(&mut self, label: &str) -> std::io::Result<PathBuf> {
+    /// Open `<dir>/<label>_<unix>.jsonl` and spawn the writer thread.
+    pub fn start(&mut self, dir: &Path, label: &str) -> std::io::Result<PathBuf> {
         self.stop();
         self.last_error = None;
-        let path = recording_path(label)?;
+        fs::create_dir_all(dir)?;
+        let path = dir.join(format!(
+            "{}_{}.jsonl",
+            crate::paths::sanitize_file_stem(label),
+            crate::paths::unix_now()
+        ));
         let (tx, rx) = bounded(CHANNEL_CAP);
         let counter = Arc::new(AtomicU64::new(0));
         let counter_worker = counter.clone();
@@ -87,7 +92,10 @@ impl SessionRecorder {
         match tx.try_send(RecorderMsg::Batch(packets.to_vec())) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                log::warn!("session recorder channel full — dropping batch of {} packets", packets.len());
+                log::warn!(
+                    "session recorder channel full — dropping batch of {} packets",
+                    packets.len()
+                );
             }
             Err(TrySendError::Disconnected(_)) => {
                 self.sender = None;
@@ -120,32 +128,6 @@ impl SessionRecorder {
             }
         }
     }
-}
-
-fn sanitize_label(label: &str) -> String {
-    let mut out = String::new();
-    for c in label.chars() {
-        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-            out.push(c);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.is_empty() {
-        "session".to_string()
-    } else {
-        out
-    }
-}
-
-fn recording_path(label: &str) -> std::io::Result<PathBuf> {
-    let dir = PathBuf::from("exports");
-    fs::create_dir_all(&dir)?;
-    let unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    Ok(dir.join(format!("{}_{unix}.jsonl", sanitize_label(label))))
 }
 
 fn writer_loop(
@@ -189,38 +171,33 @@ fn writer_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persistence::import_history;
+    use crate::persistence::import_packets;
 
     fn sample_packet(seed: i32) -> CsiData {
-        let mut p = CsiData::default();
-        p.mac = format!("AA:BB:CC:DD:EE:{:02X}", seed.unsigned_abs() & 0xFF);
-        p.rssi = -50 - seed;
-        p.csi_raw_data = vec![seed, -seed, seed + 1, -(seed + 1)];
-        p.data_length = p.csi_raw_data.len() as u32;
-        p
+        CsiData {
+            mac: format!("AA:BB:CC:DD:EE:{:02X}", seed.unsigned_abs() & 0xFF),
+            rssi: -50 - seed,
+            csi_raw_data: vec![seed, -seed, seed + 1, -(seed + 1)],
+            data_length: 4,
+            ..CsiData::default()
+        }
     }
 
     #[test]
     fn recorder_roundtrip_via_import() {
-        let _guard = crate::persistence::TEST_CWD_LOCK.lock().unwrap();
-        let tmp = std::env::temp_dir().join("csi-gui-rs-recorder-test");
+        let tmp = std::env::temp_dir().join(format!("csi-gui-rs-recorder-{}", std::process::id()));
         let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
-        let prev = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&tmp).unwrap();
 
         let mut rec = SessionRecorder::default();
-        let rel = rec.start("test_port").unwrap();
-        assert_eq!(rel.extension().and_then(|s| s.to_str()), Some("jsonl"));
-        let abs = tmp.join(&rel);
+        let path = rec.start(&tmp, "/dev/ttyACM0").unwrap();
+        assert_eq!(path.extension().and_then(|s| s.to_str()), Some("jsonl"));
         rec.append_batch(&[sample_packet(1), sample_packet(2)]);
         let summary = rec.stop().unwrap();
         assert_eq!(summary.packets_written, 2);
 
-        let imported = import_history(&abs).unwrap();
+        let imported = import_packets(&path).unwrap();
+        let _ = fs::remove_dir_all(&tmp);
         assert_eq!(imported.len(), 2);
         assert_eq!(imported[0].csi_raw_data, vec![1, -1, 2, -2]);
-
-        std::env::set_current_dir(&prev).unwrap();
     }
 }

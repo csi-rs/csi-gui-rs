@@ -82,6 +82,16 @@ pub struct DeviceInfo {
     /// `async-print`). Treated as opaque — the host stores them so
     /// views can opt into firmware-side capabilities.
     pub features: HashSet<String>,
+    /// Log encoding the build was compiled with (`log=`): `text`, or
+    /// `defmt`, which this GUI can't read. Empty on firmware before 0.9.
+    #[serde(default)]
+    pub log: String,
+    /// Console the build writes to (`transport=`): `auto`, `jtag` or `uart`.
+    #[serde(default)]
+    pub transport: String,
+    /// UART rate the build was compiled with (`baud=`), when reported.
+    #[serde(default)]
+    pub baud: Option<u32>,
 }
 
 impl Default for DeviceInfo {
@@ -93,18 +103,54 @@ impl Default for DeviceInfo {
             protocol: 0,
             mac: None,
             features: HashSet::new(),
+            log: String::new(),
+            transport: String::new(),
+            baud: None,
         }
     }
 }
 
-/// Wire-protocol version this build of the GUI understands. Compared
-/// against [`DeviceInfo::protocol`] in [`DeviceInfo::protocol_supported`].
-/// Bumped 1 → 2 for esp-csi-cli-rs v0.6.0+ (adds the `mac=` info line and
-/// the v0.7.x command surface); 2 → 4 for esp-csi-cli-rs v0.10.0+ (the
-/// IEEE 802.11bf vocabulary: `esp-now-initiator`/`-responder` and
-/// `esp-now-simplex-*` mode tokens, `set-wifi --reporting`,
-/// `set-measurement --periodicity-hz`).
+/// Newest CLI protocol this build of the GUI speaks: esp-csi-cli-rs 0.10.x,
+/// the IEEE 802.11bf vocabulary (`esp-now-initiator`/`-responder`,
+/// `set-reporting`, `set-measurement --periodicity-hz`).
 pub const SUPPORTED_PROTOCOL: u32 = 4;
+
+/// Oldest CLI protocol the GUI still accepts. Protocol 3 (esp-csi-cli-rs
+/// 0.9) has the same wire format and nearly the same commands; the
+/// renamed ones (the ESP-NOW mode tokens, `set-measurement`,
+/// `--reporting`) are rejected by that firmware with an error on the
+/// console, everything else applies.
+pub const MIN_SUPPORTED_PROTOCOL: u32 = 3;
+
+/// Why a device can't be used, as decided from its `info`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Incompatibility {
+    /// `protocol=` is outside [`MIN_SUPPORTED_PROTOCOL`]`..=`[`SUPPORTED_PROTOCOL`].
+    Protocol(u32),
+    /// A `defmt` build: its log frames are defmt-encoded, which this GUI
+    /// does not decode.
+    Defmt,
+}
+
+impl std::fmt::Display for Incompatibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Protocol(p) if *p > SUPPORTED_PROTOCOL => write!(
+                f,
+                "firmware speaks protocol {p}, newer than this GUI ({SUPPORTED_PROTOCOL}); update csi-gui-rs"
+            ),
+            Self::Protocol(p) => write!(
+                f,
+                "firmware speaks protocol {p}; this GUI needs {MIN_SUPPORTED_PROTOCOL}–{SUPPORTED_PROTOCOL} \
+                 (esp-csi-cli-rs 0.9 or later). Reflash the board"
+            ),
+            Self::Defmt => write!(
+                f,
+                "this is a defmt build (log=defmt); flash the plain-text esp-csi-cli-rs build"
+            ),
+        }
+    }
+}
 
 impl DeviceInfo {
     /// Parse `key=value` lines emitted between the banner and `END-INFO`.
@@ -127,6 +173,9 @@ impl DeviceInfo {
                             info.mac = Some(v.to_ascii_uppercase());
                         }
                     }
+                    "log" => info.log = v.to_ascii_lowercase(),
+                    "transport" => info.transport = v.to_string(),
+                    "baud" => info.baud = v.parse().ok(),
                     "features" => {
                         info.features = v
                             .split(',')
@@ -141,10 +190,88 @@ impl DeviceInfo {
         info
     }
 
-    /// `true` when [`Self::protocol`] matches [`SUPPORTED_PROTOCOL`].
-    /// Used by the reader to decide whether to enter the streaming
-    /// state or surface a "firmware not recognized" dialog.
+    /// `true` when [`Self::protocol`] is within
+    /// [`MIN_SUPPORTED_PROTOCOL`]`..=`[`SUPPORTED_PROTOCOL`].
     pub fn protocol_supported(&self) -> bool {
-        self.protocol == SUPPORTED_PROTOCOL
+        (MIN_SUPPORTED_PROTOCOL..=SUPPORTED_PROTOCOL).contains(&self.protocol)
+    }
+
+    /// `true` when the device speaks an older protocol than the newest
+    /// this GUI knows; it works, but some settings won't apply.
+    pub fn protocol_outdated(&self) -> bool {
+        self.protocol_supported() && self.protocol < SUPPORTED_PROTOCOL
+    }
+
+    /// `Ok` when the GUI can drive this device, otherwise why not.
+    pub fn check(&self) -> Result<(), Incompatibility> {
+        if !self.protocol_supported() {
+            return Err(Incompatibility::Protocol(self.protocol));
+        }
+        if self.log == "defmt" {
+            return Err(Incompatibility::Defmt);
+        }
+        Ok(())
+    }
+}
+
+impl DeviceInfo {
+    /// One-line summary, e.g. `esp-csi-cli-rs 0.10.1 · esp32c5 · proto 4`.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} {} · {} · proto {}",
+            if self.name.is_empty() {
+                "firmware"
+            } else {
+                &self.name
+            },
+            self.version,
+            self.chip.label(),
+            self.protocol
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const INFO_0_10_1: &str = "ESP-CSI-CLI/0.10.1\r\nname=esp-csi-cli-rs\r\nversion=0.10.1\r\n\
+        chip=esp32c5\r\nprotocol=4\r\nmac=10:bd:a3:ca:34:98\r\nlog=text\r\n\
+        transport=jtag\r\nbaud=115200\r\nfeatures=statistics,async-print\r\nEND-INFO\r\n";
+
+    #[test]
+    fn parses_current_info_block() {
+        let info = DeviceInfo::parse(INFO_0_10_1);
+        assert_eq!(info.name, "esp-csi-cli-rs");
+        assert_eq!(info.version, "0.10.1");
+        assert_eq!(info.chip, ChipFamily::Esp32C5);
+        assert_eq!(info.protocol, 4);
+        assert_eq!(info.mac.as_deref(), Some("10:BD:A3:CA:34:98"));
+        assert_eq!(info.log, "text");
+        assert_eq!(info.transport, "jtag");
+        assert_eq!(info.baud, Some(115_200));
+        assert!(info.features.contains("statistics"));
+        assert_eq!(info.check(), Ok(()));
+        assert!(!info.protocol_outdated());
+    }
+
+    #[test]
+    fn protocol_range_and_defmt() {
+        let mut info = DeviceInfo::parse(INFO_0_10_1);
+        info.protocol = 3;
+        assert_eq!(info.check(), Ok(()));
+        assert!(info.protocol_outdated());
+        info.protocol = 2;
+        assert_eq!(info.check(), Err(Incompatibility::Protocol(2)));
+        info.protocol = 5;
+        assert!(
+            info.check()
+                .unwrap_err()
+                .to_string()
+                .contains("update csi-gui-rs")
+        );
+        info.protocol = 4;
+        info.log = "defmt".into();
+        assert_eq!(info.check(), Err(Incompatibility::Defmt));
     }
 }
