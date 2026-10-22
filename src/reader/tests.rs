@@ -26,7 +26,7 @@ fn connect(
 ) {
     let shared = EspSharedState::handle();
     let console = Arc::new(RawConsole::new(500));
-    let h = spawn_reader_with(SimBackend::default(), shared.clone(), console.clone());
+    let h = spawn_reader_with(SimBackend, shared.clone(), console.clone());
     h.commands.send(EspCommand::OpenPort(port.into())).unwrap();
     let mut info = None;
     assert!(
@@ -54,7 +54,7 @@ fn collect(h: &ReaderHandles, n: usize) -> Vec<CsiData> {
 
 #[test]
 fn identifies_and_streams_wire_v1() {
-    let (h, shared, console, info) = connect("sim:0");
+    let (h, shared, console, info) = connect("sim:20");
     assert_eq!(info.version, crate::sim::SIM_VERSION);
     assert_eq!(info.protocol, 4);
     assert_eq!(info.chip, ChipFamily::Esp32S3);
@@ -121,7 +121,7 @@ fn identifies_and_streams_wire_v1() {
 
 #[test]
 fn streams_array_list_with_mac_tail() {
-    let (h, _shared, _console, info) = connect("sim:2");
+    let (h, _shared, _console, info) = connect("sim:22");
     let cfg = EspConfig {
         log_mode: LogMode::ArrayList,
         ..EspConfig::default()
@@ -143,14 +143,14 @@ fn streams_array_list_with_mac_tail() {
     assert_eq!(pkts.len(), 5);
     assert!(
         pkts.iter()
-            .all(|p| p.is_decoded() && p.mac == "5A:1E:FF:00:00:02")
+            .all(|p| p.is_decoded() && p.mac == "5A:1E:FF:00:00:16")
     );
     h.commands.send(EspCommand::Shutdown).unwrap();
 }
 
 #[test]
 fn timed_run_ends_by_itself() {
-    let (h, shared, _console, info) = connect("sim:1");
+    let (h, shared, _console, info) = connect("sim:21");
     assert_eq!(info.chip, ChipFamily::Esp32C5);
     let cfg = EspConfig::default();
     h.commands
@@ -175,11 +175,18 @@ fn timed_run_ends_by_itself() {
 }
 
 #[test]
-fn banner_needs_line_start_and_terminator() {
-    assert!(banner_match(
-        b"noise\nESP-CSI-CLI/0.10.1\r\n",
-        b"ESP-CSI-CLI/"
+fn banner_found_through_boot_noise() {
+    assert!(is_banner(b"noise\nESP-CSI-CLI/0.10.1\r\n"));
+    // Seen on a classic ESP32 after an RTS reset: ROM bytes glued on.
+    assert!(is_banner(
+        b"I (424) boot: Disabling RNG\nlog isaESP-CSI-CLI/0.10.1\nmac=78"
     ));
-    assert!(!banner_match(b"xESP-CSI-CLI/0.10.1\r\n", b"ESP-CSI-CLI/"));
-    assert!(!banner_match(b"ESP-CSI-CLI/0.10", b"ESP-CSI-CLI/"));
+    // A line handed in without its `\n` still counts.
+    assert!(is_banner(b"log t: ESP-CSI-CLI/0.10.1"));
+    assert!(!is_banner(b"ESP-CSI-CLI/"), "needs a version");
+    assert!(!is_banner(b"ESP-CSI-CLI/ \n"));
+    assert!(
+        !is_banner(b"help ESP-CSI-CLI/x\n"),
+        "version starts with a digit"
+    );
 }

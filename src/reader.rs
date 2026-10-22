@@ -101,6 +101,9 @@ pub enum ReaderEvent {
     Session(SessionAnnounce),
     /// The firmware ended a run on its own (`start --duration=N` elapsed).
     CollectionEnded,
+    /// The board rebooted by itself (panic, watchdog, reset button) and is
+    /// being re-identified. Its runtime config is gone.
+    Rebooted,
 }
 
 /// Channel bundle returned by [`spawn_reader`]. Send
@@ -210,6 +213,9 @@ pub fn spawn_reader_with(
                 frame: Vec::with_capacity(8192),
                 last_seq: None,
                 connection: ConnState::Disconnected,
+                last_identify: Instant::now(),
+                stopping: None,
+                last_info: None,
                 events: ev_tx,
                 packets: pkt_tx,
             };
@@ -255,9 +261,25 @@ struct Reader {
     /// Last wire-v1 `stream_seq` seen this run, for gap counting.
     last_seq: Option<u32>,
     connection: ConnState,
+    /// When identification last ran, for retrying an unknown board.
+    last_identify: Instant,
+    /// A `q` was sent and the board hasn't confirmed: when it was last
+    /// sent, and how many times.
+    stopping: Option<(Instant, u8)>,
+    /// When `info` was last sent: its reply repeats the banner, which must
+    /// not be mistaken for a reboot.
+    last_info: Option<Instant>,
     events: Sender<ReaderEvent>,
     packets: Sender<CsiData>,
 }
+
+/// How often a board that didn't identify is asked again. Covers a board
+/// that was still booting, or wedged mid-run, when the port opened.
+const IDENTIFY_RETRY: Duration = Duration::from_secs(10);
+
+/// Upper bound on a partial frame / line before it is thrown away: a
+/// stream with no delimiter in it is garbage (or the wrong log mode).
+const MAX_PENDING: usize = 64 * 1024;
 
 impl Reader {
     fn run(&mut self, cmd_rx: Receiver<EspCommand>) {
@@ -284,7 +306,13 @@ impl Reader {
             let mut io_err = false;
             let mut progressed = false;
             if self.connection == ConnState::Streaming {
+                // Bounded by count and by time, so a busy stream can't hold
+                // off a Stop or a Shutdown for more than a few ms.
+                let pass = Instant::now();
                 for _ in 0..READER_BATCH {
+                    if pass.elapsed() > Duration::from_millis(30) {
+                        break;
+                    }
                     match self.read_one() {
                         ReadOutcome::Progress => progressed = true,
                         ReadOutcome::Idle => break,
@@ -295,6 +323,11 @@ impl Reader {
                     }
                 }
             } else {
+                if self.connection == ConnState::UnknownFirmware
+                    && self.last_identify.elapsed() >= IDENTIFY_RETRY
+                {
+                    self.identify(false);
+                }
                 std::thread::sleep(Duration::from_millis(50));
             }
 
@@ -368,7 +401,14 @@ impl Reader {
                 self.shared.bump_io_generation();
             }
             EspCommand::Stop => {
-                self.send_bytes(b"q");
+                // Outside a run `q` is just text in the CLI's line buffer;
+                // end the line so it doesn't prefix the next command.
+                if self.collecting() {
+                    self.send_bytes(b"q");
+                    self.stopping = Some((Instant::now(), 1));
+                } else {
+                    self.send_bytes(b"q\r\n");
+                }
                 self.shared.is_collecting.store(false, Ordering::Release);
                 self.reset_parsers();
                 self.shared.bump_io_generation();
@@ -435,7 +475,16 @@ impl Reader {
                 self.open_failures = self.open_failures.saturating_add(1);
                 let backoff = 250u64 << self.open_failures.min(5);
                 self.next_open = Instant::now() + Duration::from_millis(backoff.min(5_000));
-                self.set_state(ConnState::Error(format!("open {name}: {e}")));
+                if self.backend.present(&name) && self.open_failures >= 4 {
+                    // Persistently unopenable (permissions, another program).
+                    self.set_state(ConnState::Error(format!("open {name}: {e}")));
+                } else if self.backend.present(&name) {
+                    // Briefly busy, e.g. another session is moving off it.
+                    self.set_state(ConnState::Opening);
+                } else {
+                    // Unplugged (or re-enumerating): wait for it quietly.
+                    self.set_state(ConnState::Disconnected);
+                }
             }
         }
     }
@@ -443,24 +492,30 @@ impl Reader {
     /// Find out what's on the port. See the module docs for the sequence.
     /// `hard_reset` skips the polite ask and goes straight to RTS.
     fn identify(&mut self, hard_reset: bool) {
+        self.last_identify = Instant::now();
         self.reset_parsers();
         self.shared.is_collecting.store(false, Ordering::Release);
         self.shared.config_applied.store(false, Ordering::Release);
         self.set_state(ConnState::Identifying);
 
         let mut info = None;
-        if !hard_reset {
-            self.send_bytes(b"q\r\n");
-            self.drain(Duration::from_millis(500));
-            info = self.fetch_info(Duration::from_millis(2_000));
+        // If `q` can't quiet the line, the board is streaming on a saturated
+        // UART and won't read its input until reset: skip the polite ask.
+        if !hard_reset && self.quiesce() {
+            info = self.fetch_info(Duration::from_millis(2_500));
+            if info.is_none() && self.quiesce() {
+                // A stray byte may have been glued to the command: once more.
+                info = self.fetch_info(Duration::from_millis(2_000));
+            }
         }
         if info.is_none() {
+            self.console.push("» (reset via DTR/RTS)");
             if let Some(port) = self.port.as_mut() {
                 port.get_mut().pulse_reset();
             }
             if self.await_banner(Duration::from_secs(6)) {
                 // Let the CLI finish booting before talking to it.
-                self.drain(Duration::from_millis(200));
+                self.drain_until_quiet(Duration::from_millis(300), Duration::from_secs(2));
                 info = self.fetch_info(Duration::from_millis(3_000));
             }
         }
@@ -482,21 +537,91 @@ impl Reader {
         }
     }
 
-    /// Read and discard for `dur` (forwarding text to the console).
-    fn drain(&mut self, dur: Duration) {
-        let deadline = Instant::now() + dur;
-        let mut buf = [0u8; 1024];
+    /// Stop whatever the board is doing and wait for the line to go quiet.
+    ///
+    /// A board left collecting by a host that died keeps streaming, and on
+    /// a 115200-baud UART it can have seconds of frames queued: `info` sent
+    /// before that backlog drains reaches a CLI that is still collecting and
+    /// is ignored. So: `q`, then drain until 300 ms of silence; repeat up to
+    /// three times while the stream keeps going.
+    ///
+    /// Returns `false` when the line never went quiet. Measured on a classic
+    /// ESP32 at 115200 with a busy channel: while its UART output is
+    /// saturated the firmware doesn't read input at all, and no number of
+    /// `q`s stops it — only a reset does.
+    fn quiesce(&mut self) -> bool {
+        // One drain that re-sends `q` every second until 300 ms of silence,
+        // for at most 3 s.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut quiet = false;
+        let mut last_q = Instant::now();
+        let mut last_data = Instant::now();
+        let start = Instant::now();
+        let mut drained = 0usize;
+        let mut sent = 1;
+        self.console.push("» q");
+        self.send_bytes(b"q");
+        let mut buf = [0u8; 4096];
         while Instant::now() < deadline {
             let Some(port) = self.port.as_mut() else {
-                return;
+                return false;
             };
             match port.read(&mut buf) {
-                Ok(0) => return,
-                Ok(n) => push_printable(&self.console, &buf[..n]),
-                Err(e) if is_transient(&e) => {}
-                Err(_) => return,
+                Ok(0) => break,
+                Ok(n) => {
+                    last_data = Instant::now();
+                    drained += n;
+                    push_printable(&self.console, &buf[..n]);
+                    if last_q.elapsed() >= Duration::from_secs(1) {
+                        self.send_bytes(b"q");
+                        sent += 1;
+                        last_q = Instant::now();
+                    }
+                }
+                Err(e) if is_transient(&e) => {
+                    if last_data.elapsed() >= Duration::from_millis(300) {
+                        quiet = true;
+                        break;
+                    }
+                }
+                Err(_) => break,
             }
         }
+        self.console.push(format!(
+            "(quiesce: {drained} bytes drained in {:.1} s, `q` sent {sent}×)",
+            start.elapsed().as_secs_f32()
+        ));
+        // Terminate whatever half-line the CLI holds, and swallow its reply.
+        self.send_bytes(b"\r\n");
+        self.drain_until_quiet(Duration::from_millis(150), Duration::from_millis(600));
+        quiet
+    }
+
+    /// Read and discard until nothing arrives for `quiet`, or `max` passes.
+    /// Returns `true` when the line went quiet.
+    fn drain_until_quiet(&mut self, quiet: Duration, max: Duration) -> bool {
+        let deadline = Instant::now() + max;
+        let mut last_data = Instant::now();
+        let mut buf = [0u8; 4096];
+        while Instant::now() < deadline {
+            let Some(port) = self.port.as_mut() else {
+                return true;
+            };
+            match port.read(&mut buf) {
+                Ok(0) => return true,
+                Ok(n) => {
+                    last_data = Instant::now();
+                    push_printable(&self.console, &buf[..n]);
+                }
+                Err(e) if is_transient(&e) => {
+                    if last_data.elapsed() >= quiet {
+                        return true;
+                    }
+                }
+                Err(_) => return true,
+            }
+        }
+        false
     }
 
     /// Wait for `ESP-CSI-CLI/<version>` at the start of a line. Uses raw
@@ -544,13 +669,11 @@ impl Reader {
                     if line.last() != Some(&b'\n') {
                         continue; // timed out mid-line; keep accumulating
                     }
+                    push_printable(&self.console, &line);
                     let text = String::from_utf8_lossy(&line);
                     let trimmed = text.trim_matches(['\r', '\n', '\0', ' ']);
                     // The prompt can prefix the first response line.
                     let trimmed = trimmed.trim_start_matches("> ");
-                    if !trimmed.is_empty() {
-                        self.console.push(trimmed);
-                    }
                     if trimmed == "END-INFO" {
                         let info = DeviceInfo::parse(&acc);
                         // `protocol=` is what marks a real esp-csi-cli-rs reply.
@@ -613,6 +736,9 @@ impl Reader {
 
     fn send_line(&mut self, line: &str) {
         let shown = line.trim_start_matches(['\r', '\n']);
+        if shown.trim() == "info" {
+            self.last_info = Some(Instant::now());
+        }
         self.console.push(format!("» {shown}"));
         let mut buf = line.as_bytes().to_vec();
         buf.extend_from_slice(b"\r\n");
@@ -640,6 +766,58 @@ impl Reader {
         self.shared.is_collecting.store(false, Ordering::Release);
         self.next_open = Instant::now() + Duration::from_millis(500);
         self.set_state(ConnState::Disconnected);
+    }
+
+    /// After a `q`, watch for the board to actually stop. On a saturated
+    /// UART (a classic ESP32 at 115200 with a busy channel) the `q` can be
+    /// lost or acted on late; while binary frames keep arriving with no
+    /// "Collection complete", send it again every 1.5 s, and after four
+    /// tries reset the board.
+    fn confirm_stop(&mut self, chunk: &[u8]) {
+        let Some((sent, tries)) = self.stopping else {
+            return;
+        };
+        if contains(chunk, COLLECTION_COMPLETE) {
+            self.stopping = None;
+        } else if !is_printable(chunk) && sent.elapsed() > Duration::from_millis(1_500) {
+            if tries >= 4 {
+                // A board streaming on a saturated UART doesn't read input;
+                // a reset is the only way to stop it. Its config is re-applied
+                // when it comes back (and the run isn't resumed: it was stopped).
+                log::warn!("{}: board ignores `q`; resetting it", self.device_id);
+                self.console
+                    .push("(board ignores `q` while its UART is saturated; resetting it)");
+                self.stopping = None;
+                self.identify(true);
+            } else {
+                self.send_bytes(b"q");
+                self.stopping = Some((Instant::now(), tries + 1));
+            }
+        } else if sent.elapsed() > Duration::from_secs(15) {
+            self.stopping = None;
+        }
+    }
+
+    /// The board rebooted on its own: tell the UI, then identify it again
+    /// (the UI re-applies its config, and resumes a run that was going).
+    fn rebooted(&mut self) {
+        // The reply to our own `info` carries the banner too. That reply only
+        // comes while idle; mid-run, a banner is always a reboot.
+        if !self.collecting()
+            && self
+                .last_info
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(3))
+        {
+            self.frame.clear();
+            return;
+        }
+        log::info!("{}: board rebooted; re-identifying", self.device_id);
+        push_printable(&self.console, &self.frame);
+        self.console.push("(board rebooted)");
+        self.shared.is_collecting.store(false, Ordering::Release);
+        let _ = self.events.send(ReaderEvent::Rebooted);
+        self.drain_until_quiet(Duration::from_millis(300), Duration::from_secs(3));
+        self.identify(false);
     }
 
     /// The firmware ended the run by itself.
@@ -687,11 +865,19 @@ impl Reader {
             // Short read (the timeout hit mid-frame): keep the bytes.
             Ok(_) => return ReadOutcome::Progress,
             Err(e) if is_transient(&e) => {
-                // A timed run that ends in serialized mode leaves
-                // "Collection complete." unterminated: no `\0` follows.
-                if collecting && contains(&self.frame, COLLECTION_COMPLETE) {
-                    push_printable(&self.console, &self.frame);
-                    self.collection_ended();
+                // Text that never gets a `\0` after it: a timed run ending
+                // ("Collection complete."), or the board rebooting (its boot
+                // log and banner) while we wait for the next frame.
+                if collecting && delim == b'\0' {
+                    if is_banner(&self.frame) {
+                        self.rebooted();
+                    } else if contains(&self.frame, COLLECTION_COMPLETE) {
+                        push_printable(&self.console, &self.frame);
+                        self.collection_ended();
+                    }
+                }
+                if self.frame.len() > MAX_PENDING {
+                    self.frame.clear();
                 }
                 return ReadOutcome::Idle;
             }
@@ -702,15 +888,15 @@ impl Reader {
 
         if !collecting {
             push_printable(&self.console, &frame);
+            self.confirm_stop(&frame);
             // A banner while idle means the board rebooted (a panic, a
             // watchdog, the reset button): its config is gone. Re-identify
             // so the UI sees it come back and re-applies the config.
-            if frame.starts_with(b"ESP-CSI-CLI/") || contains(&frame, b"\nESP-CSI-CLI/") {
+            if is_banner(&frame) {
+                // Already on the console; `rebooted` shouldn't repeat it.
                 self.frame = frame;
                 self.frame.clear();
-                log::info!("{}: device rebooted; re-identifying", self.device_id);
-                self.drain(Duration::from_millis(300));
-                self.identify(false);
+                self.rebooted();
                 return ReadOutcome::Progress;
             }
         } else if delim == b'\0' {
@@ -728,6 +914,10 @@ impl Reader {
             return;
         }
         if frame.len() <= MAX_TEXT_CHUNK && is_printable(frame) {
+            if is_banner(frame) {
+                self.rebooted();
+                return;
+            }
             push_printable(&self.console, frame);
             if contains(frame, COLLECTION_COMPLETE) {
                 self.collection_ended();
@@ -804,6 +994,10 @@ impl Reader {
     fn handle_text_line(&mut self, mode: LogMode, line: &[u8]) {
         let line = String::from_utf8_lossy(line);
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        if is_banner(trimmed.as_bytes()) {
+            self.rebooted();
+            return;
+        }
         if contains(trimmed.as_bytes(), COLLECTION_COMPLETE) {
             self.console.push(trimmed);
             self.collection_ended();
@@ -891,7 +1085,12 @@ fn push_printable(console: &RawConsole, bytes: &[u8]) {
         // Drop the CLI's ESC[2K line-clear so the console shows plain text.
         let text = String::from_utf8_lossy(&line).replace("\x1b[2K", "");
         let text = text.trim();
-        if !text.is_empty() && is_printable(text.as_bytes()) {
+        // Short fragments are what binary frames split on `\n` look like.
+        let meaningful = text.len() >= 3 || text == ">";
+        if meaningful
+            && is_printable(text.as_bytes())
+            && text.bytes().any(|b| b.is_ascii_alphanumeric() || b == b'>')
+        {
             console.push(text.to_string());
         }
     }
@@ -907,10 +1106,18 @@ pub fn enumerate_ports() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Look for `needle` at the start of a line (buffer start or after `\n`)
-/// followed by ≥1 non-whitespace byte and a line terminator — the
-/// `^ESP-CSI-CLI/\S+$` banner, matched without UTF-8 validation so it can
-/// be found through bootloader garbage.
+/// `true` when `bytes` contain the `ESP-CSI-CLI/<version>` banner a
+/// board prints on every boot. The version must start with a digit, so a
+/// half-received `ESP-CSI-CLI/` doesn't count.
+fn is_banner(bytes: &[u8]) -> bool {
+    banner_match(bytes, b"ESP-CSI-CLI/")
+}
+
+/// Look for `needle` followed by ≥1 non-whitespace byte and a line
+/// terminator — the `ESP-CSI-CLI/<version>` banner. Not anchored to the
+/// line start: after a reset, ROM or bootloader bytes can arrive glued in
+/// front of it on the same line (`log isaESP-CSI-CLI/0.10.1`). Matched
+/// without UTF-8 validation, so it is found through binary garbage.
 fn banner_match(acc: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() || acc.len() < needle.len() {
         return false;
@@ -921,14 +1128,23 @@ fn banner_match(acc: &[u8], needle: &[u8]) -> bool {
             return false;
         };
         let pos = i + rel;
-        let at_line_start = pos == 0 || acc[pos - 1] == b'\n';
-        if at_line_start {
-            let after = &acc[pos + needle.len()..];
-            if let Some(end_rel) = after.iter().position(|&b| b == b'\n' || b == b'\r') {
-                let version = &after[..end_rel];
-                if !version.is_empty() && version.iter().all(|&b| !b.is_ascii_whitespace()) {
-                    return true;
-                }
+        let after = &acc[pos + needle.len()..];
+        // The version runs to a line end, or to the end of the buffer when
+        // the caller hands in a line whose `\n` was already stripped.
+        let end_rel = after
+            .iter()
+            .position(|&b| b == b'\n' || b == b'\r')
+            .or_else(|| {
+                (!after.is_empty() && after.iter().all(|b| b.is_ascii_graphic()))
+                    .then_some(after.len())
+            });
+        if let Some(end_rel) = end_rel {
+            let version = &after[..end_rel];
+            if !version.is_empty()
+                && version.iter().all(|&b| b.is_ascii_graphic())
+                && version[0].is_ascii_digit()
+            {
+                return true;
             }
         }
         i = pos + 1;

@@ -47,6 +47,9 @@ each pane bound to a different board.
 - **Live preprocessing**: interpolation, denoising (rolling mean / median, Savitzky–Golay,
   Hampel, Butterworth, DWT, FFT delay), detrending and feature scaling, applied as packets
   arrive.
+- **Self-healing.** Unplug a board, reboot it, or let its firmware crash mid-run: it is
+  re-identified, re-configured and resumes the run under the same session, on whatever
+  port it comes back on.
 - **Quality of life**: Ctrl+K command palette, toasts instead of modal pop-ups, a
   firmware-problem card that says what to do, workspace saved between launches, and
   templates.

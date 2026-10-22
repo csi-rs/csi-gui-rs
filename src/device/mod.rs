@@ -99,6 +99,11 @@ pub struct DeviceSession {
     frames_at_last_tick: u64,
     /// Tick at which the current run started (for "Start all" alignment).
     pub started_at: Option<Instant>,
+    /// `Some` while the user wants this board collecting: set by
+    /// [`Self::start`], cleared by [`Self::stop`] or a timed run ending.
+    /// Holds the session id to rejoin. When the board drops out (unplug,
+    /// reboot) and comes back, the run resumes under it.
+    pub resume: Option<Option<u32>>,
 }
 
 impl DeviceSession {
@@ -129,6 +134,7 @@ impl DeviceSession {
             live: true,
             frames_at_last_tick: 0,
             started_at: None,
+            resume: None,
         }
     }
 
@@ -167,6 +173,7 @@ impl DeviceSession {
             live: false,
             frames_at_last_tick: 0,
             started_at: None,
+            resume: None,
         }
     }
 
@@ -248,6 +255,7 @@ impl DeviceSession {
     /// Start a run. `session` is the shared `(id, epoch_us)` from "Start
     /// all", or `None` to let the firmware pick a session id.
     pub fn start(&mut self, session: Option<(u32, u64)>) {
+        self.resume = Some(session.map(|(id, _)| id));
         self.preprocess_buffer.clear();
         self.started_at = Some(Instant::now());
         self.send(EspCommand::Start {
@@ -259,7 +267,20 @@ impl DeviceSession {
 
     /// Stop the run (`q`).
     pub fn stop(&mut self) {
+        self.resume = None;
         self.send(EspCommand::Stop);
+    }
+
+    /// Restart the run the user wanted after the board came back, rejoining
+    /// its session (new epoch: the board's clock restarted). Returns `true`
+    /// when a run was resumed.
+    fn resume_run(&mut self) -> bool {
+        let Some(id) = self.resume else {
+            return false;
+        };
+        let session = id.map(|id| (id, crate::paths::unix_now_us()));
+        self.start(session);
+        true
     }
 
     /// Drain reader events. Returns notices for the UI, and whether the
@@ -287,8 +308,13 @@ impl DeviceSession {
                 ReaderEvent::Info(info) => self.info = Some(info),
                 ReaderEvent::Session(s) => self.last_session = Some(s),
                 ReaderEvent::CollectionEnded => {
+                    self.resume = None;
                     notices.push(Notice::Info(format!("{}: run finished", self.label())))
                 }
+                ReaderEvent::Rebooted => notices.push(Notice::Warn(format!(
+                    "{} rebooted by itself; reconnecting",
+                    self.label()
+                ))),
             }
         }
         became_ready
@@ -414,8 +440,6 @@ pub struct DeviceManager {
     pub tick: u64,
     /// Ports the user removed; auto-attach leaves them alone.
     ignored: Vec<String>,
-    /// Missed scans per session port, for debounced re-enumeration.
-    missing: Vec<(String, u8)>,
 }
 
 impl DeviceManager {
@@ -433,7 +457,6 @@ impl DeviceManager {
             history_size,
             tick: 0,
             ignored: Vec::new(),
-            missing: Vec::new(),
         }
     }
 
@@ -627,6 +650,20 @@ impl DeviceManager {
         let Some(s) = self.sessions.get_mut(i) else {
             return;
         };
+        // After a re-enumeration the old port name can briefly hold another
+        // board. Don't push this session's config onto it: the port follow
+        // in `follow_moved_boards` moves the session to its own board.
+        let expected = s.usb_serial.as_deref().and_then(discovery::normalize_mac);
+        let actual = s.info.as_ref().and_then(|i| i.mac.clone());
+        if let (Some(e), Some(a)) = (&expected, &actual)
+            && e != a
+        {
+            notices.push(Notice::Warn(format!(
+                "{} is now another board ({a}); waiting for {e} to reappear",
+                s.label()
+            )));
+            return;
+        }
         if let Some(stored) = s.mac().and_then(|m| store.get(&m)) {
             if s.alias.is_empty() {
                 s.alias = stored.alias.clone();
@@ -646,52 +683,48 @@ impl DeviceManager {
                 info.protocol
             )));
         }
-        if let Err(e) = s.apply_config() {
-            notices.push(Notice::Warn(format!(
+        match s.apply_config() {
+            // The reader handles commands in order, so `start` lands after
+            // the config.
+            Ok(()) if s.resume_run() => {
+                notices.push(Notice::Info(format!("{}: run resumed", s.label())));
+            }
+            Ok(()) => {}
+            Err(e) => notices.push(Notice::Warn(format!(
                 "{}: config not applied: {e}",
                 s.label()
-            )));
+            ))),
         }
     }
 
-    /// Sessions whose port vanished but whose USB serial now shows up
-    /// under another name: re-open them there (after 2 missed scans, so a
-    /// board mid-reboot isn't chased).
+    /// Keep each session on its board. A board is known by its USB serial
+    /// number (the MAC, on native USB); when it shows up under another
+    /// port name — it re-enumerated, or two boards came back in a
+    /// different order and swapped `/dev` names — the session re-opens it
+    /// there. A board that vanished is only chased once it reappears, so
+    /// one mid-reboot isn't disturbed.
     fn follow_moved_boards(&mut self, notices: &mut Vec<Notice>) {
-        let present: Vec<&str> = self.ports.iter().map(|p| p.name.as_str()).collect();
         let mut moves = Vec::new();
         for (i, s) in self.sessions.iter().enumerate() {
             if !s.live || crate::sim::is_sim_port(&s.port) {
                 continue;
             }
-            if present.contains(&s.port.as_str()) {
-                self.missing.retain(|(p, _)| p != &s.port);
+            let Some(serial) = s.usb_serial.as_deref() else {
                 continue;
-            }
-            let count = match self.missing.iter_mut().find(|(p, _)| p == &s.port) {
-                Some((_, c)) => {
-                    *c = c.saturating_add(1);
-                    *c
-                }
-                None => {
-                    self.missing.push((s.port.clone(), 1));
-                    1
-                }
             };
-            if count < 2 {
-                continue;
+            let here = self.ports.iter().find(|p| p.name == s.port);
+            if here.is_some_and(|p| p.serial.as_deref() == Some(serial)) {
+                continue; // still where it was
             }
-            if let Some(serial) = &s.usb_serial
-                && let Some(new) = discovery::find_moved(&self.ports, serial, &s.port)
-                && !self.has_port(new)
-            {
+            if let Some(new) = discovery::find_moved(&self.ports, serial, &s.port) {
                 moves.push((i, new.to_string()));
             }
         }
         for (i, new) in moves {
             let s = &mut self.sessions[i];
             notices.push(Notice::Info(format!("{} moved to {new}", s.label())));
-            self.missing.retain(|(p, _)| p != &s.port);
+            // If another session holds `new` it is moving away too (a
+            // swap); the reader retries the open until the port is free.
             s.reopen(new);
         }
     }
@@ -883,8 +916,8 @@ mod tests {
         crate::paths::set_data_dir_override(dir.join("data"));
         let mut rerun = RerunSink::new(Transport::Off);
         let mut m = DeviceManager::new(115_200, 1000);
-        m.add("sim:0");
-        m.add("sim:1");
+        m.add("sim:30");
+        m.add("sim:31");
         wait_ready(&mut m, 2);
 
         let targets = m.targets();
@@ -925,5 +958,137 @@ mod tests {
         m.stop_all(&targets);
         m.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Pump `m` (with ticks) until `pred` holds or 15 s pass; returns the
+    /// notices seen.
+    fn pump_until(
+        m: &mut DeviceManager,
+        mut pred: impl FnMut(&DeviceManager) -> bool,
+    ) -> Vec<Notice> {
+        let pre = PreprocessConfig::default();
+        let mut rerun = RerunSink::new(Transport::Off);
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            seen.extend(m.pump());
+            m.tick(&pre, &mut rerun);
+            if pred(m) {
+                return seen;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("condition not reached; notices: {seen:?}");
+    }
+
+    fn collecting_manager(port: &str) -> (DeviceManager, u32) {
+        let dir = std::env::temp_dir().join(format!("csi-gui-rs-recov-{}", std::process::id()));
+        crate::paths::set_config_dir_override(dir.join("config"));
+        crate::paths::set_data_dir_override(dir.join("data"));
+        let mut m = DeviceManager::new(115_200, 1000);
+        m.add(port);
+        pump_until(&mut m, |m| {
+            m.sessions[0].is_ready() && m.sessions[0].config_applied()
+        });
+        let (id, _) = m.start_all(&[0]);
+        pump_until(&mut m, |m| {
+            m.sessions[0].shared.frames_total.load(Ordering::Relaxed) > 20
+        });
+        (m, id)
+    }
+
+    fn frames(m: &DeviceManager) -> u64 {
+        m.sessions[0].shared.frames_total.load(Ordering::Relaxed)
+    }
+
+    /// A board that reboots mid-run (panic, watchdog) is re-identified,
+    /// re-configured, and resumes under the same session.
+    #[test]
+    fn reboot_mid_run_resumes_the_session() {
+        let port = "sim:40";
+        let (mut m, id) = collecting_manager(port);
+        crate::sim::SimControl::of(port).reboot();
+        // Wait for the reboot to be noticed and the run to come back.
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let pre = PreprocessConfig::default();
+        let mut rerun = RerunSink::new(Transport::Off);
+        while Instant::now() < deadline
+            && !seen
+                .iter()
+                .any(|n| matches!(n, Notice::Info(s) if s.contains("resumed")))
+        {
+            seen.extend(m.pump());
+            m.tick(&pre, &mut rerun);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        seen.extend(pump_until(&mut m, |m| {
+            m.sessions[0].is_collecting()
+                && frames(m) > 20
+                && m.sessions[0].shared.session_id.load(Ordering::Relaxed) == id
+        }));
+        assert!(
+            seen.iter()
+                .any(|n| matches!(n, Notice::Warn(s) if s.contains("rebooted"))),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|n| matches!(n, Notice::Info(s) if s.contains("resumed"))),
+            "{seen:?}"
+        );
+        let last = m.sessions[0].history.last().unwrap().csi.clone().unwrap();
+        assert_eq!(last.session_id, id, "rejoined the original session");
+        m.shutdown();
+    }
+
+    /// Unplug mid-run: the session shows offline (not an error) while the
+    /// board is gone, and resumes when it is plugged back in.
+    #[test]
+    fn unplug_and_replug_resumes() {
+        let port = "sim:41";
+        let (mut m, id) = collecting_manager(port);
+        let ctl = crate::sim::SimControl::of(port);
+        ctl.unplug();
+        pump_until(&mut m, |m| {
+            m.sessions[0].conn_state == ConnState::Disconnected
+        });
+        // Stays offline, not "error", for as long as it's away.
+        for _ in 0..40 {
+            m.pump();
+            assert!(
+                !m.sessions[0].conn_state.is_problem(),
+                "{:?}",
+                m.sessions[0].conn_state
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        ctl.plug();
+        pump_until(&mut m, |m| {
+            m.sessions[0].is_collecting()
+                && m.sessions[0].shared.session_id.load(Ordering::Relaxed) == id
+                && frames(m) > 10
+        });
+        m.shutdown();
+    }
+
+    /// A run the user stopped stays stopped across a reboot.
+    #[test]
+    fn stopped_run_is_not_resumed() {
+        let port = "sim:42";
+        let (mut m, _) = collecting_manager(port);
+        m.stop_all(&[0]);
+        pump_until(&mut m, |m| !m.sessions[0].is_collecting());
+        crate::sim::SimControl::of(port).reboot();
+        pump_until(&mut m, |m| {
+            m.sessions[0].is_ready() && m.sessions[0].config_applied()
+        });
+        for _ in 0..50 {
+            m.pump();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!m.sessions[0].is_collecting());
+        assert!(!crate::sim::SimControl::of(port).collecting());
+        m.shutdown();
     }
 }

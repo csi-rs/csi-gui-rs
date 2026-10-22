@@ -57,12 +57,24 @@ ESP32-S3 and ESP32-C5.
   of counting as a decode failure; `stream_seq` gaps are counted as lost
   frames and UI back-pressure as dropped frames.
 - Identification asks first (`q`, `info`) and only then resets, which suits
-  native USB-Serial-JTAG boards; a board that reboots mid-session is
-  re-identified and its config re-applied.
+  native USB-Serial-JTAG boards; a board still streaming a run that a
+  crashed host left behind is reset when `q` can't quiet it.
+- **Automatic recovery.** A board that drops out mid-run comes back by
+  itself: unplugged and replugged, soft-restarted, reset, or rebooted by a
+  firmware panic or watchdog (detected from its boot banner in any log
+  mode). It is re-identified, its config is re-applied, and a run that was
+  going resumes under the same session id. Boards whose `/dev` names swap
+  on re-enumeration are followed by USB serial number. A board that didn't
+  identify is retried every 10 s. Tested on hardware with
+  `examples/recovery_drill.rs`.
 - CLI commands are paced on the firmware prompt. Sent back to back, a full
   config overflowed the classic ESP32's UART RX FIFO, and esp-csi-cli-rs
   0.10.1 panics (`Rx(FifoOverflowed)`) and reboots.
 - A run that ends by itself (`start --duration`) is detected.
+- Stop is confirmed: `q` is re-sent while the board keeps streaming, and a
+  board that ignores it (a classic ESP32 whose 115200 UART is saturated
+  doesn't read input) is reset. Commands are serviced within 30 ms even
+  while a stream is busy.
 - The config form only shows rows that apply to the chosen mode and chip,
   validates per chip, and uses drag values instead of text buffers.
 - `app.rs` split into `app/` modules; new `device`, `paths`, `probe` and

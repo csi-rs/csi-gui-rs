@@ -46,18 +46,67 @@ pub fn sim_ports(n: usize) -> Vec<String> {
     (0..n).map(|i| format!("{SIM_PREFIX}{i}")).collect()
 }
 
-/// [`PortBackend`] for simulated devices. Each port name gets its own
-/// device, kept across re-opens like a real board.
 type SharedDevice = Arc<Mutex<SimDevice>>;
 
+/// Every simulated board in the process, by port name. Global so a board
+/// outlives the session that opened it (re-opens find the same board, as
+/// with hardware) and so tests can reach it to inject faults.
+static DEVICES: Mutex<Vec<(String, SharedDevice)>> = Mutex::new(Vec::new());
+
+/// [`PortBackend`] for simulated devices. Each port name gets its own
+/// device, kept across re-opens like a real board.
 #[derive(Default, Clone)]
-pub struct SimBackend {
-    devices: Arc<Mutex<Vec<(String, SharedDevice)>>>,
+pub struct SimBackend;
+
+/// Fault injection for a simulated board, for testing recovery.
+pub struct SimControl(SharedDevice);
+
+impl SimControl {
+    /// The board at `port` (created if it doesn't exist yet).
+    pub fn of(port: &str) -> Self {
+        Self(SimBackend.device(port))
+    }
+
+    /// Reboot by itself, as after a panic or the reset button: the run
+    /// stops, the boot log and banner come out, the config is gone.
+    pub fn reboot(&self) {
+        let mut d = self.0.lock().unwrap();
+        d.collecting = false;
+        d.run_end = None;
+        d.log_mode = LogMode::Text;
+        d.out.clear();
+        // Bootloader noise, then the banner glued to it, as a classic
+        // ESP32 really prints it.
+        d.print("ets Jul 29 2019 12:21:46\r\nrst:0x1 (POWERON_RESET)\r\nlog isa");
+        d.banner();
+    }
+
+    /// Pull the cable: the port disappears and open links fail.
+    pub fn unplug(&self) {
+        let mut d = self.0.lock().unwrap();
+        d.present = false;
+        d.collecting = false;
+        d.run_end = None;
+        d.log_mode = LogMode::Text;
+        d.out.clear();
+    }
+
+    /// Plug it back in (it boots fresh).
+    pub fn plug(&self) {
+        let mut d = self.0.lock().unwrap();
+        d.present = true;
+        d.banner();
+    }
+
+    /// `true` while collecting.
+    pub fn collecting(&self) -> bool {
+        self.0.lock().unwrap().collecting
+    }
 }
 
 impl SimBackend {
     fn device(&self, name: &str) -> SharedDevice {
-        let mut devs = self.devices.lock().unwrap();
+        let mut devs = DEVICES.lock().unwrap();
         if let Some((_, d)) = devs.iter().find(|(n, _)| n == name) {
             return d.clone();
         }
@@ -79,11 +128,26 @@ impl PortBackend for SimBackend {
                 "not a simulated port",
             ));
         }
-        Ok(Box::new(SimLink(self.device(name))))
+        let d = self.device(name);
+        {
+            let mut dev = d.lock().unwrap();
+            if !dev.present {
+                return Err(io::Error::new(io::ErrorKind::NotFound, "sim: unplugged"));
+            }
+            // Serial ports are opened exclusively; so are simulated ones.
+            if dev.opened {
+                return Err(io::Error::new(
+                    io::ErrorKind::ResourceBusy,
+                    "sim: port busy",
+                ));
+            }
+            dev.opened = true;
+        }
+        Ok(Box::new(SimLink(d)))
     }
 
     fn present(&self, name: &str) -> bool {
-        is_sim_port(name)
+        is_sim_port(name) && self.device(name).lock().unwrap().present
     }
 }
 
@@ -105,7 +169,7 @@ impl PortBackend for MixedBackend {
 
     fn present(&self, name: &str) -> bool {
         if is_sim_port(name) {
-            true
+            self.sim.present(name)
         } else {
             crate::reader::SerialBackend.present(name)
         }
@@ -114,10 +178,21 @@ impl PortBackend for MixedBackend {
 
 struct SimLink(Arc<Mutex<SimDevice>>);
 
+impl Drop for SimLink {
+    fn drop(&mut self) {
+        if let Ok(mut d) = self.0.lock() {
+            d.opened = false;
+        }
+    }
+}
+
 impl Read for SimLink {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         {
             let mut d = self.0.lock().unwrap();
+            if !d.present {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "sim: unplugged"));
+            }
             d.tick();
             if !d.out.is_empty() {
                 let n = buf.len().min(d.out.len());
@@ -135,7 +210,11 @@ impl Read for SimLink {
 
 impl Write for SimLink {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().input(buf);
+        let mut d = self.0.lock().unwrap();
+        if !d.present {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "sim: unplugged"));
+        }
+        d.input(buf);
         Ok(buf.len())
     }
 
@@ -173,6 +252,10 @@ struct SimDevice {
     stream_seq: u32,
     frame_seq: u16,
     boot: Instant,
+    /// `false` while "unplugged".
+    present: bool,
+    /// A link is open on it.
+    opened: bool,
 }
 
 impl SimDevice {
@@ -197,6 +280,8 @@ impl SimDevice {
             stream_seq: 0,
             frame_seq: 0,
             boot: Instant::now(),
+            present: true,
+            opened: false,
         }
     }
 
