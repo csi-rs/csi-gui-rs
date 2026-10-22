@@ -1,14 +1,14 @@
 [package]
 name = "csi-gui-rs"
-version = "1.2.0"
+version = "2.0.0"
 edition = "2024"
-rust-version = "1.85"
-description = "Desktop GUI for live Wi-Fi CSI capture from ESP32 boards running esp-csi-cli-rs"
+rust-version = "1.92"
+description = "Desktop GUI for live Wi-Fi CSI capture from one or many ESP32 boards running esp-csi-cli-rs"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/csi-rs/csi-gui-rs"
 documentation = "https://docs.rs/csi-gui-rs"
 readme = "README.md"
-keywords = ["csi", "esp32", "wifi", "egui", "visualization"]
+keywords = ["csi", "esp32", "wifi-sensing", "egui", "802-11bf"]
 categories = ["visualization", "embedded", "hardware-support"]
 # README screenshots live in `images/` (repo root) so the GitHub
 # front-page renders them, but they shouldn't bloat the crate tarball
@@ -20,6 +20,7 @@ exclude = [
     "images/**",
     "exports/**",
     ".github/**",
+    "Cross.toml",
 ]
 
 [features]
