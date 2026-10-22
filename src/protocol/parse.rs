@@ -264,8 +264,12 @@ fn apply_kv(c: &mut CsiData, k: &str, v: &str) {
 /// [<seq>,<rssi>,<rate>,<nf>,<ch>,<ts>,<sig_len>,<rx_state>,
 ///  <secondary_channel>,<sgi>,<ant>,<ampdu_cnt>,<sig_mode>,<mcs>,<bandwidth>,
 ///  <smoothing>,<not_sounding>,<aggregation>,<stbc>,<fec_coding>,
-///  <sig_len>,<csi_data_len>,[<v0>,<v1>,…,<vN-1>]]
+///  <sig_len>,<csi_data_len>,[<v0>,<v1>,…,<vN-1>],<tx-mac>]
 /// ```
+///
+/// The trailing transmitter MAC (`aa:bb:cc:dd:ee:ff`) arrived with
+/// esp-csi-rs 0.12; lines from older firmware end `…,<vN-1>]]` and parse
+/// the same, with an empty [`CsiData::mac`].
 ///
 /// ESP32-C5 (21 scalars) and ESP32-C6 (24 scalars) substitute the
 /// classic 802.11n metadata block with the C5/C6 block (`dump_len`,
@@ -281,8 +285,9 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
     if !line.starts_with('[') {
         return None;
     }
-    // The line ends `]]` — outer `]` is the very last byte; inner array
-    // starts at the last `[` and ends at the second-to-last `]`.
+    // The outer `]` is the very last byte; the inner array starts at the
+    // last `[` and ends at the second-to-last `]`. Anything between the two
+    // closing brackets is the transmitter-MAC tail (esp-csi-rs 0.12+).
     let inner_open = line.rfind('[')?;
     if inner_open == 0 {
         // Only one `[` — no outer wrapper.
@@ -293,6 +298,7 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
     let inner_end = line[..inner_close].rfind(']').map(|p| p + 1)?;
     let inner = &line[inner_open..inner_end];
     let csi = parse_int_array(inner);
+    let mac_tail = line[inner_end..inner_close].trim_matches(|c: char| c == ',' || c.is_whitespace());
 
     // Scalars: between '[' and the comma immediately before the inner array.
     let scalars_str = line[1..inner_open]
@@ -325,6 +331,10 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
     };
 
     // Fields 0..=7 are common across all chips.
+    c.sequence_number = g_u(0) as u32;
+    if !mac_tail.is_empty() {
+        c.mac = mac_tail.to_ascii_uppercase();
+    }
     c.rssi = g_i(1) as i32;
     c.rate = g_u(2) as u32;
     c.noise_floor = g_i(3) as i32;
@@ -514,6 +524,16 @@ mod tests {
         assert_eq!(pkt.sig_len, 512);
         assert_eq!(pkt.data_length, 6);
         assert_eq!(pkt.csi_raw_data, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn array_list_reads_transmitter_mac_tail() {
+        let line = "[17,-60,11,-92,6,123456,100,0,0,0,0,0,1,7,0,1,1,0,0,0,100,4,[1,-2,3,-4],a0:85:e3:f5:48:90]\r\n";
+        let c = parse_array_list(line, ChipFamily::Esp32).expect("parses");
+        assert_eq!(c.sequence_number, 17);
+        assert_eq!(c.mac, "A0:85:E3:F5:48:90");
+        assert_eq!(c.rssi, -60);
+        assert_eq!(c.csi_raw_data, vec![1, -2, 3, -4]);
     }
 
     #[test]

@@ -4,14 +4,16 @@
 //! cycle/serialize/render-as-CLI on demand. They are the GUI's
 //! source-of-truth for what gets pushed to the device with `ApplyConfig`.
 //!
-//! Grammar matches esp-csi-cli-rs v0.10.0 or later: `set-csi` flags are
-//! positive `on|off` toggles (not the old `--disable-*` booleans), and the
-//! surface includes AP mode, the emitter and ESP-NOW modes, the reporting
-//! setting (`set-wifi --reporting`), `set-protocol`, the measurement
-//! periodicity (`set-measurement`), `raw` CSI delivery, the CSI-output
-//! delivery gate, and C5-only toggles. Mode tokens and flag names follow the
-//! IEEE 802.11bf vocabulary of esp-csi-cli-rs 0.10.0 (CLI `protocol=4`).
+//! Grammar matches esp-csi-cli-rs 0.10.x (CLI `protocol=4`, the IEEE
+//! 802.11bf vocabulary): `set-wifi` with the nine modes and their extras
+//! (HE20, AP leases / burst, emitter period and interface), `set-reporting`
+//! with the threshold / decimate policies and `--report-to`,
+//! `set-measurement`, `set-session`, `set-csi-filter`, `set-protocol`
+//! (including `ax` on the ESP32-C5/C6), the classic and C5/C6 `set-csi`
+//! acquisition flags with the built-in presets, `set-csi-delivery` and
+//! `set-csi-output`.
 
+use crate::protocol::info::ChipFamily;
 use serde::{Deserialize, Serialize};
 
 /// The node's **mode** — how it reaches the channel.
@@ -106,8 +108,50 @@ impl WifiMode {
     pub fn admits_reporting_choice(self) -> bool {
         matches!(
             self,
-            Self::Station | Self::WifiAp | Self::EspNowInitiator | Self::EspNowResponder
+            Self::Station
+                | Self::Sniffer
+                | Self::WifiAp
+                | Self::EspNowInitiator
+                | Self::EspNowResponder
         )
+    }
+
+    /// `true` for the modes that send `--he20`: the emitters and the ESP-NOW
+    /// pair (ESP32-C5/C6 only).
+    pub fn uses_he20(self) -> bool {
+        matches!(
+            self,
+            Self::Ht20Emitter | Self::Ht40Emitter | Self::EspNowInitiator | Self::EspNowResponder
+        )
+    }
+
+    /// `true` for the modes that generate sounding traffic and so read
+    /// `set-measurement --periodicity-hz`. The sniffer and the simplex peer
+    /// sound nothing; the emitters pace by their inject period instead.
+    pub fn uses_periodicity(self) -> bool {
+        matches!(
+            self,
+            Self::Station
+                | Self::WifiAp
+                | Self::EspNowInitiator
+                | Self::EspNowResponder
+                | Self::EspNowSimplexSource
+        )
+    }
+
+    /// Short human description, for tooltips.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Station => "Joins an AP and captures CSI from its traffic (pings the gateway).",
+            Self::Sniffer => "Passive monitor on one channel; captures CSI from every frame heard.",
+            Self::WifiAp => "Runs a softAP and floods its stations; captures their replies.",
+            Self::Ht20Emitter => "Injects HT20 frames; captures nothing. Pair with sniffers.",
+            Self::Ht40Emitter => "Injects HT40 frames; captures nothing. Pair with sniffers.",
+            Self::EspNowInitiator => "ESP-NOW pair, the end that sources the soundings.",
+            Self::EspNowResponder => "ESP-NOW pair, the end that answers the initiator.",
+            Self::EspNowSimplexSource => "One-way ESP-NOW flood; captures nothing.",
+            Self::EspNowSimplexPeer => "Receives a simplex source's flood and measures it.",
+        }
     }
 
     /// `true` for the modes that read `set-wifi --peer-mac`: the emitters (injection
@@ -163,6 +207,9 @@ pub enum WifiProtocol {
     Lr,
     A,
     Ac,
+    /// 802.11ax. ESP32-C5/C6 only; esp-csi-rs then runs the HE20 bring-up
+    /// for `station`, `wifi-ap` and `sniffer`.
+    Ax,
 }
 
 impl<'de> Deserialize<'de> for WifiProtocol {
@@ -176,14 +223,21 @@ impl<'de> Deserialize<'de> for WifiProtocol {
 }
 
 impl WifiProtocol {
-    pub const ALL: [WifiProtocol; 6] = [
+    pub const ALL: [WifiProtocol; 7] = [
         WifiProtocol::B,
         WifiProtocol::G,
         WifiProtocol::N,
         WifiProtocol::Lr,
         WifiProtocol::A,
         WifiProtocol::Ac,
+        WifiProtocol::Ax,
     ];
+
+    /// `true` when the firmware accepts this protocol on `chip`. `ax` needs
+    /// an ESP32-C5/C6; an unidentified chip is given the benefit of the doubt.
+    pub fn supported_on(self, chip: ChipFamily) -> bool {
+        self != Self::Ax || chip.is_c5c6() || chip == ChipFamily::Unknown
+    }
 
     /// CLI token used by `set-protocol --protocol=…`.
     pub fn cli(self) -> &'static str {
@@ -194,6 +248,7 @@ impl WifiProtocol {
             Self::Lr => "lr",
             Self::A => "a",
             Self::Ac => "ac",
+            Self::Ax => "ax",
         }
     }
     /// Round-robin to the next protocol.
@@ -204,7 +259,8 @@ impl WifiProtocol {
             Self::N => Self::Lr,
             Self::Lr => Self::A,
             Self::A => Self::Ac,
-            Self::Ac => Self::B,
+            Self::Ac => Self::Ax,
+            Self::Ax => Self::B,
         }
     }
 }
@@ -244,30 +300,123 @@ impl Ht40 {
     }
 }
 
-/// The node's **reporting** setting (`set-wifi --reporting=…`): whether the
-/// CSI it measures is reported to the host. `report` sends it; `none`
-/// measures but reports nothing.
+/// The node's **reporting** (`set-wifi --reporting=…` /
+/// `set-reporting --policy=…`): whether, and how often, its measurements
+/// leave it.
 ///
 /// Only read by the modes that admit a choice
-/// ([`WifiMode::admits_reporting_choice`]); every other mode fixes it.
-/// Needs esp-csi-cli-rs 0.10.0 or later.
+/// ([`WifiMode::admits_reporting_choice`]); emitters always report none and
+/// each ESP-NOW simplex end is fixed by which end it is. A sniffer takes
+/// every value except [`Reporting::None`] ([`Reporting::allowed_for`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Reporting {
-    /// Report measured CSI to the host (the firmware default).
+    /// Report every measurement (the firmware default).
     #[default]
     Report,
     /// Measure, but report nothing.
     None,
+    /// IEEE 802.11bf threshold-based reporting: report only while the
+    /// channel moves, i.e. while the measurement score is at or above
+    /// [`EspConfig::threshold_level`], and for
+    /// [`EspConfig::threshold_hold_ms`] after.
+    Threshold,
+    /// Report every [`EspConfig::decimate_n`]-th measurement.
+    Decimate,
 }
 
 impl Reporting {
-    pub const ALL: [Reporting; 2] = [Reporting::Report, Reporting::None];
+    /// Every value, in menu order.
+    pub const ALL: [Reporting; 4] = [
+        Reporting::Report,
+        Reporting::None,
+        Reporting::Threshold,
+        Reporting::Decimate,
+    ];
 
-    /// CLI token used by `set-wifi --reporting=…`.
+    /// CLI token used by `--reporting=…` and `--policy=…`.
     pub fn cli(self) -> &'static str {
         match self {
             Self::Report => "report",
             Self::None => "none",
+            Self::Threshold => "threshold",
+            Self::Decimate => "decimate",
+        }
+    }
+
+    /// `false` for the one combination the firmware refuses: a sniffer that
+    /// reports nothing observes nothing.
+    pub fn allowed_for(self, mode: WifiMode) -> bool {
+        !(mode == WifiMode::Sniffer && self == Self::None)
+    }
+}
+
+/// Where `report` sends measurements (`--report-to=…`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ReportTo {
+    /// The serial output, where this GUI reads them (the default).
+    #[default]
+    Host,
+    /// Only on-device consumers (callback / queue). Nothing reaches the
+    /// GUI, so plots stay empty.
+    Local,
+}
+
+impl ReportTo {
+    /// Every value, in menu order.
+    pub const ALL: [ReportTo; 2] = [ReportTo::Host, ReportTo::Local];
+
+    /// CLI token.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::Host => "host",
+            Self::Local => "local",
+        }
+    }
+}
+
+/// Which interface an emitter injects from (`--emitter-iface=…`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum EmitterIface {
+    /// The station interface (the default).
+    #[default]
+    Sta,
+    /// The softAP interface.
+    Ap,
+}
+
+impl EmitterIface {
+    /// Every value, in menu order.
+    pub const ALL: [EmitterIface; 2] = [EmitterIface::Sta, EmitterIface::Ap];
+
+    /// CLI token.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::Sta => "sta",
+            Self::Ap => "ap",
+        }
+    }
+}
+
+/// Minimum PHY class a frame needs for its CSI to be delivered
+/// (`set-csi-filter --min-phy=…`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MinPhy {
+    /// Every PHY (the default).
+    #[default]
+    Any,
+    /// 802.11n and better; drops legacy 11b/g frames.
+    Ht,
+}
+
+impl MinPhy {
+    /// Every value, in menu order.
+    pub const ALL: [MinPhy; 2] = [MinPhy::Any, MinPhy::Ht];
+
+    /// CLI token.
+    pub fn cli(self) -> &'static str {
+        match self {
+            Self::Any => "any",
+            Self::Ht => "ht",
         }
     }
 }
@@ -316,6 +465,16 @@ impl LogMode {
     }
     /// Internal `AtomicU8` tag the reader thread uses to pick a parser.
     /// Not on the wire — used only between the UI and reader.
+    pub fn from_id(id: u8) -> Self {
+        match id {
+            0 => Self::Serialized,
+            2 => Self::ArrayList,
+            3 => Self::EspCsiTool,
+            _ => Self::Text,
+        }
+    }
+
+    /// Internal tag the reader keys its parser on; inverse of [`Self::from_id`].
     pub fn id(self) -> u8 {
         match self {
             Self::Serialized => 0,
@@ -390,7 +549,15 @@ impl CsiDelivery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(missing_docs)] // each variant maps 1:1 to a labelled CLI token
 pub enum PhyRate {
-    R1m, R1mL, R2m, R5m5, R5m5L, R11m, R11mL,
+    // The firmware treats `1m-l` / `5m5-l` / `11m-l` as the same rates as
+    // `1m` / `5m5` / `11m`; configs saved with those variants load as these.
+    #[serde(alias = "R1mL")]
+    R1m,
+    R2m,
+    #[serde(alias = "R5m5L")]
+    R5m5,
+    #[serde(alias = "R11mL")]
+    R11m,
     R6m, R9m, R12m, R18m, R24m, R36m, R48m, R54m,
     Mcs0Lgi, Mcs1Lgi, Mcs2Lgi, Mcs3Lgi, Mcs4Lgi, Mcs5Lgi, Mcs6Lgi, Mcs7Lgi,
     Mcs0Sgi,
@@ -398,9 +565,9 @@ pub enum PhyRate {
 
 impl PhyRate {
     /// Every variant in declaration order — used for round-robin cycling.
-    pub const ALL: [PhyRate; 24] = [
-        PhyRate::R1m, PhyRate::R1mL, PhyRate::R2m, PhyRate::R5m5, PhyRate::R5m5L,
-        PhyRate::R11m, PhyRate::R11mL, PhyRate::R6m, PhyRate::R9m, PhyRate::R12m,
+    pub const ALL: [PhyRate; 21] = [
+        PhyRate::R1m, PhyRate::R2m, PhyRate::R5m5,
+        PhyRate::R11m, PhyRate::R6m, PhyRate::R9m, PhyRate::R12m,
         PhyRate::R18m, PhyRate::R24m, PhyRate::R36m, PhyRate::R48m, PhyRate::R54m,
         PhyRate::Mcs0Lgi, PhyRate::Mcs1Lgi, PhyRate::Mcs2Lgi, PhyRate::Mcs3Lgi,
         PhyRate::Mcs4Lgi, PhyRate::Mcs5Lgi, PhyRate::Mcs6Lgi, PhyRate::Mcs7Lgi,
@@ -410,9 +577,9 @@ impl PhyRate {
     /// CLI token used by `set-rate --rate=…`.
     pub fn cli(self) -> &'static str {
         match self {
-            Self::R1m => "1m", Self::R1mL => "1m-l", Self::R2m => "2m",
-            Self::R5m5 => "5m5", Self::R5m5L => "5m5-l", Self::R11m => "11m",
-            Self::R11mL => "11m-l", Self::R6m => "6m", Self::R9m => "9m",
+            Self::R1m => "1m", Self::R2m => "2m",
+            Self::R5m5 => "5m5", Self::R11m => "11m",
+            Self::R6m => "6m", Self::R9m => "9m",
             Self::R12m => "12m", Self::R18m => "18m", Self::R24m => "24m",
             Self::R36m => "36m", Self::R48m => "48m", Self::R54m => "54m",
             Self::Mcs0Lgi => "mcs0-lgi", Self::Mcs1Lgi => "mcs1-lgi",
@@ -438,7 +605,10 @@ impl PhyRate {
 /// The CSI feature flags are **enable-sense** (`true` = feature on),
 /// matching the firmware's positive `--lltf=on|off` grammar. All default
 /// to `true` (the firmware default is "all CSI features on").
-#[derive(Clone, Debug, Serialize, Deserialize)]
+// `serde(default)`: configs saved by an older build (devices.json) load with
+// the defaults for any field they predate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EspConfig {
     /// Mode (`set-wifi --mode=…`).
     pub wifi_mode: WifiMode,
@@ -446,6 +616,19 @@ pub struct EspConfig {
     /// that admit a choice; see [`WifiMode::admits_reporting_choice`].
     #[serde(default)]
     pub reporting: Reporting,
+    /// Where `report` sends measurements (`--report-to`).
+    pub report_to: ReportTo,
+    /// Threshold score for [`Reporting::Threshold`] (`set-reporting --level`,
+    /// 0–65535, firmware default 6000, uncalibrated).
+    pub threshold_level: u16,
+    /// How long to keep reporting after crossing the threshold, in ms
+    /// (`set-reporting --hold-ms`).
+    pub threshold_hold_ms: u32,
+    /// Decimation factor for [`Reporting::Decimate`] (`set-reporting --n`).
+    pub decimate_n: u32,
+    /// Force HE20 / 802.11ax SU on the emitters and the ESP-NOW pair
+    /// (`set-wifi --he20`, ESP32-C5/C6 only).
+    pub he20: bool,
     /// Wi-Fi PHY protocol (`set-protocol --protocol=…`).
     pub protocol: WifiProtocol,
     /// Primary channel (`set-wifi --set-channel=…`). Must satisfy
@@ -461,6 +644,14 @@ pub struct EspConfig {
     pub ap_password: String,
     /// Serve DHCP in AP mode (`set-wifi --ap-dhcp=on|off`).
     pub ap_dhcp: bool,
+    /// DHCP lease pool size in `wifi-ap` (`--ap-leases`, 1–8).
+    pub ap_leases: u8,
+    /// Synchronized burst flood to every station in `wifi-ap` (`--ap-burst`).
+    pub ap_burst: bool,
+    /// Emitter inject period in µs (`--inject-period-us`; 20000 ≈ 50 frames/s).
+    pub inject_period_us: u32,
+    /// Which interface an emitter injects from (`--emitter-iface`).
+    pub emitter_iface: EmitterIface,
     /// Peer MAC (`set-wifi --peer-mac=…`). In the emitter modes it is the
     /// destination for injected frames (empty = broadcast); in the ESP-NOW
     /// modes it is the explicit peer (empty = automatic pairing), and must be
@@ -481,6 +672,11 @@ pub struct EspConfig {
     /// path keeps its timing. This is not the reporting setting; see
     /// [`EspConfig::reporting`]. No effect on an emitter, which captures nothing.
     pub csi_output: bool,
+    /// Deliver CSI only for frames from this transmitter
+    /// (`set-csi-filter --peer-mac`). Empty = any.
+    pub csi_filter_peer: String,
+    /// Minimum PHY class for delivered CSI (`set-csi-filter --min-phy`).
+    pub csi_filter_min_phy: MinPhy,
     /// Wire format for emitted CSI packets (`set-log-mode`).
     pub log_mode: LogMode,
     /// PHY rate (`set-rate`). Applied only by the ESP-NOW pair; reporting only
@@ -526,6 +722,16 @@ pub struct EspConfig {
     pub c5_csi_force_lltf: bool,
     /// ESP32-C5 only: VHT-LTF on VHT20 PPDU (`--csi-vht=on|off`).
     pub c5_csi_vht: bool,
+    /// C5/C6: HE-LTF on HE SU PPDUs (`--csi-su`).
+    pub c5c6_csi_su: bool,
+    /// C5/C6: HE-LTF on HE MU PPDUs (`--csi-mu`).
+    pub c5c6_csi_mu: bool,
+    /// C5/C6: HE-LTF on DCM PPDUs (`--csi-dcm`).
+    pub c5c6_csi_dcm: bool,
+    /// C5/C6: HE-LTF on beamformed PPDUs (`--csi-beamformed`).
+    pub c5c6_csi_beamformed: bool,
+    /// C5/C6: HE-LTF on HE STBC PPDUs (`--csi-he-stbc`).
+    pub c5c6_csi_he_stbc: bool,
 
     /// Auto-stop after this many seconds (`start --duration=N`). `None`
     /// means "run until user sends `q`".
@@ -537,6 +743,11 @@ impl Default for EspConfig {
         Self {
             wifi_mode: WifiMode::Sniffer,
             reporting: Reporting::Report,
+            report_to: ReportTo::Host,
+            threshold_level: 6000,
+            threshold_hold_ms: 1000,
+            decimate_n: 2,
+            he20: false,
             protocol: WifiProtocol::Lr,
             channel: 6,
             sta_ssid: String::new(),
@@ -544,11 +755,17 @@ impl Default for EspConfig {
             ap_ssid: "esp-csi-ap".to_string(),
             ap_password: String::new(),
             ap_dhcp: true,
+            ap_leases: 4,
+            ap_burst: false,
+            inject_period_us: 20_000,
+            emitter_iface: EmitterIface::Sta,
             peer_mac: String::new(),
             ht40: Ht40::None,
             periodicity_hz: 100,
             unsolicited: false,
             csi_output: true,
+            csi_filter_peer: String::new(),
+            csi_filter_min_phy: MinPhy::Any,
             log_mode: LogMode::Serialized,
             phy_rate: PhyRate::Mcs0Lgi,
             tx_task: true,
@@ -570,6 +787,11 @@ impl Default for EspConfig {
             csi_dump_ack: true,
             c5_csi_force_lltf: true,
             c5_csi_vht: true,
+            c5c6_csi_su: true,
+            c5c6_csi_mu: true,
+            c5c6_csi_dcm: true,
+            c5c6_csi_beamformed: true,
+            c5c6_csi_he_stbc: false,
 
             start_duration_sec: None,
         }
@@ -580,39 +802,74 @@ impl EspConfig {
     /// Validate string-field lengths / formats before sending. SSIDs/passwords
     /// > 32 bytes would panic the device (`heapless::String::push_str().unwrap()`).
     pub fn validate(&self) -> Result<(), String> {
-        if self.sta_ssid.len() > 32 {
-            return Err("STA SSID exceeds 32 bytes".into());
+        self.validate_for(ChipFamily::Unknown)
+    }
+
+    /// [`Self::validate`], plus the checks that depend on the chip: `ax`
+    /// and HE20 need an ESP32-C5/C6, and 5 GHz channels need a chip with
+    /// a 5 GHz radio (the C5).
+    pub fn validate_for(&self, chip: ChipFamily) -> Result<(), String> {
+        for (what, v) in [
+            ("STA SSID", &self.sta_ssid),
+            ("STA password", &self.sta_password),
+            ("AP SSID", &self.ap_ssid),
+            ("AP password", &self.ap_password),
+        ] {
+            if v.len() > 32 {
+                return Err(format!("{what} exceeds 32 bytes"));
+            }
         }
-        if self.sta_password.len() > 32 {
-            return Err("STA password exceeds 32 bytes".into());
+        if self.wifi_mode != WifiMode::Station && !valid_channel(self.channel) {
+            return Err(format!("invalid channel {}", self.channel));
         }
-        if self.ap_ssid.len() > 32 {
-            return Err("AP SSID exceeds 32 bytes".into());
+        if self.channel > 14 && chip != ChipFamily::Unknown && chip != ChipFamily::Esp32C5 {
+            return Err(format!(
+                "channel {} is 5 GHz; only the ESP32-C5 has a 5 GHz radio",
+                self.channel
+            ));
         }
-        if self.ap_password.len() > 32 {
-            return Err("AP password exceeds 32 bytes".into());
+        if !valid_peer_mac(self.peer_mac.trim()) {
+            return Err(format!(
+                "invalid peer MAC '{}' (use aa:bb:cc:dd:ee:ff, or blank)",
+                self.peer_mac
+            ));
         }
-        if !self.peer_mac.trim().is_empty() && parse_mac(&self.peer_mac).is_none() {
-            return Err("Destination MAC must be aa:bb:cc:dd:ee:ff".into());
+        if !valid_peer_mac(self.csi_filter_peer.trim()) {
+            return Err(format!(
+                "invalid CSI filter MAC '{}' (use aa:bb:cc:dd:ee:ff, or blank for any)",
+                self.csi_filter_peer
+            ));
         }
         if self.c5c6_val_scale_cfg > 3 {
             return Err("val_scale_cfg must be 0..=3".into());
         }
-        if !valid_channel(self.channel) {
-            return Err(format!("invalid channel {}", self.channel));
+        if self.wifi_mode.admits_reporting_choice() && !self.reporting.allowed_for(self.wifi_mode) {
+            return Err("a sniffer can't use reporting `none`: it would observe nothing".into());
         }
-        if !valid_peer_mac(&self.peer_mac) {
+        if !(1..=8).contains(&self.ap_leases) {
+            return Err("AP leases must be 1..=8".into());
+        }
+        if self.decimate_n == 0 {
+            return Err("decimation factor must be at least 1".into());
+        }
+        if self.inject_period_us == 0 {
+            return Err("inject period must be at least 1 µs".into());
+        }
+        if !self.protocol.supported_on(chip) {
             return Err(format!(
-                "invalid destination MAC '{}' (use aa:bb:cc:dd:ee:ff)",
-                self.peer_mac
+                "protocol `{}` needs an ESP32-C5/C6 (this is an {})",
+                self.protocol.cli(),
+                chip.label()
             ));
+        }
+        if self.he20 && !(chip.is_c5c6() || chip == ChipFamily::Unknown) {
+            return Err(format!("HE20 needs an ESP32-C5/C6 (this is an {})", chip.label()));
         }
         Ok(())
     }
 }
 
-/// `true` when `mac` is empty (meaning broadcast) or six hex octets
-/// separated by `:` or `-`, mirroring the firmware's `--peer-mac` parser.
+/// `true` for a blank MAC or `aa:bb:cc:dd:ee:ff` (`:` or `-` separated).
 pub fn valid_peer_mac(mac: &str) -> bool {
     if mac.is_empty() {
         return true;
@@ -654,45 +911,6 @@ pub fn parse_mac(s: &str) -> Option<[u8; 6]> {
     }
     Some(out)
 }
-
-/// Display-ordered list of fields. The index of each label here MUST match
-/// the arm order in [`crate::ui::esp_panel`]'s `render_value`.
-pub const ESP_CONFIG_FIELDS: &[&str] = &[
-    "WiFi Mode",
-    "WiFi Protocol",
-    "Channel",
-    "STA SSID",
-    "STA Password",
-    "AP SSID",
-    "AP Password",
-    "AP DHCP",
-    "Peer MAC (emitter / ESP-NOW)",
-    "HT40 (AP / ESP-NOW)",
-    "Reporting",
-    "Periodicity (Hz)",
-    "Unsolicited",
-    "CSI Output",
-    "Log Mode",
-    "PHY Rate",
-    "TX Task",
-    "RX Task",
-    "CSI Delivery",
-    "CSI Logging",
-    "Classic: LLTF",
-    "Classic: HT-LTF",
-    "Classic: STBC-HT-LTF",
-    "Classic: LTF-merge",
-    "C5/C6: CSI",
-    "C5/C6: CSI legacy",
-    "C5/C6: CSI HT20",
-    "C5/C6: CSI HT40",
-    "C5/C6: val_scale_cfg (0..3)",
-    "CSI preset",
-    "C5/C6: dump ACK",
-    "C5: force LLTF",
-    "C5: VHT",
-    "Start duration (sec, blank = ∞)",
-];
 
 #[cfg(test)]
 mod tests {

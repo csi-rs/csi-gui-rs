@@ -24,12 +24,6 @@ pub struct EspSharedState {
     /// `true` while the firmware is in a collection session. Set by the
     /// reader on `EspCommand::Start`, cleared on `Stop` / disconnect.
     pub is_collecting: AtomicBool,
-    /// Latch the UI sets to request a DTR/RTS chip reset on the reader
-    /// thread's next iteration. The reader clears it.
-    pub should_reset: AtomicBool,
-    /// Reserved latch for "kick off a `start` without going through the
-    /// command channel". Currently unused; kept for parity with the TUI.
-    pub should_start: AtomicBool,
     /// Internal tag identifying which [`crate::protocol::config::LogMode`]
     /// parser the reader should run. Updated when `set-log-mode` is sent.
     pub log_mode_id: AtomicU8,
@@ -45,6 +39,17 @@ pub struct EspSharedState {
     /// Subset of `frames_total` where the parser returned no payload.
     /// Drives the dashboard's decode-rate %.
     pub frames_decode_failed: AtomicU64,
+    /// Frames lost between the radio and the host: gaps in the wire-v1
+    /// `stream_seq` counter.
+    pub frames_lost: AtomicU64,
+    /// Packets decoded but dropped because the UI fell behind (the
+    /// reader → UI channel was full).
+    pub frames_dropped: AtomicU64,
+    /// Wire-v1 frames that decoded but carry no plottable CSI (grouped
+    /// 802.11bf or variation reports).
+    pub frames_unplottable: AtomicU64,
+    /// Session id announced by the device's last run (wire v1), or `0`.
+    pub session_id: AtomicU32,
     /// `true` only while [`crate::reader::ConnState::Streaming`].
     pub connected: AtomicBool,
     /// Current serial baud rate. Mutated when the user reconnects with a
@@ -68,14 +73,16 @@ impl EspSharedState {
     pub fn with_baud(baud: u32) -> Self {
         Self {
             is_collecting: AtomicBool::new(false),
-            should_reset: AtomicBool::new(false),
-            should_start: AtomicBool::new(false),
             // Firmware boots in ArrayList; updated when `set-log-mode` is applied.
             log_mode_id: AtomicU8::new(2),
             config_applied: AtomicBool::new(false),
             io_generation: AtomicU64::new(0),
             frames_total: AtomicU64::new(0),
             frames_decode_failed: AtomicU64::new(0),
+            frames_lost: AtomicU64::new(0),
+            frames_dropped: AtomicU64::new(0),
+            frames_unplottable: AtomicU64::new(0),
+            session_id: AtomicU32::new(0),
             connected: AtomicBool::new(false),
             baud: AtomicU32::new(baud),
         }
@@ -91,11 +98,18 @@ impl EspSharedState {
         Arc::new(Self::with_baud(baud))
     }
 
-    /// Zero `frames_total` + `frames_decode_failed`. Called by the
+    /// Zero every frame counter. Called by the
     /// reader on start/stop so each session begins from zero.
     pub fn reset_counters(&self) {
-        self.frames_total.store(0, Ordering::Relaxed);
-        self.frames_decode_failed.store(0, Ordering::Relaxed);
+        for c in [
+            &self.frames_total,
+            &self.frames_decode_failed,
+            &self.frames_lost,
+            &self.frames_dropped,
+            &self.frames_unplottable,
+        ] {
+            c.store(0, Ordering::Relaxed);
+        }
     }
 
     /// Increment and return the new `io_generation`. Views compare

@@ -1,0 +1,154 @@
+{
+  "tiling": {
+    "root": {
+      "Split": {
+        "direction": "Vertical",
+        "ratio": 60,
+        "children": [
+          {
+            "Split": {
+              "direction": "Horizontal",
+              "ratio": 50,
+              "children": [
+                {
+                  "Pane": {
+                    "id": 1,
+                    "view": "Magnitude"
+                  }
+                },
+                {
+                  "Pane": {
+                    "id": 2,
+                    "view": "Phase"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "Split": {
+              "direction": "Horizontal",
+              "ratio": 22,
+              "children": [
+                {
+                  "Pane": {
+                    "id": 3,
+                    "view": "Dashboard"
+                  }
+                },
+                {
+                  "Split": {
+                    "direction": "Horizontal",
+                    "ratio": 60,
+                    "children": [
+                      {
+                        "Pane": {
+                          "id": 4,
+                          "view": "Spectrogram"
+                        }
+                      },
+                      {
+                        "Pane": {
+                          "id": 5,
+                          "view": "Evolution"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "focused": 1,
+    "fullscreen": false,
+    "is_default": false,
+    "theme_variant": 4
+  },
+  "preprocess": {
+    "detrending": "Off",
+    "interpolation": "Off",
+    "feature_scaling": "Off",
+    "params": {
+      "moving_average_window": 16,
+      "quantization_levels": 16,
+      "scaling_per_packet": true
+    }
+  },
+  "view_states": {
+    "per_pane": {
+      "1": {
+        "console_autoscroll": true,
+        "iq_window": 60,
+        "spectrogram_window": 200,
+        "spectrogram_metric": "phase_delta",
+        "phase_window": 60,
+        "phase_mode": "unwrapped",
+        "phase_display": "traces",
+        "magnitude_window": 60,
+        "magnitude_scale": "db",
+        "magnitude_display": "heatmap",
+        "evolution_window": 600,
+        "evolution_metric": "mean_amplitude"
+      },
+      "2": {
+        "console_autoscroll": true,
+        "iq_window": 60,
+        "spectrogram_window": 200,
+        "spectrogram_metric": "phase_delta",
+        "phase_window": 80,
+        "phase_mode": "detrended",
+        "phase_display": "heatmap",
+        "magnitude_window": 30,
+        "magnitude_scale": "linear",
+        "magnitude_display": "traces",
+        "evolution_window": 600,
+        "evolution_metric": "mean_amplitude"
+      },
+      "3": {
+        "console_autoscroll": true,
+        "iq_window": 60,
+        "spectrogram_window": 150,
+        "spectrogram_metric": "phase_delta",
+        "phase_window": 30,
+        "phase_mode": "unwrapped",
+        "phase_display": "traces",
+        "magnitude_window": 30,
+        "magnitude_scale": "linear",
+        "magnitude_display": "traces",
+        "evolution_window": 300,
+        "evolution_metric": "mean_amplitude"
+      },
+      "4": {
+        "console_autoscroll": true,
+        "iq_window": 60,
+        "spectrogram_window": 240,
+        "spectrogram_metric": "phase_delta",
+        "phase_window": 30,
+        "phase_mode": "unwrapped",
+        "phase_display": "traces",
+        "magnitude_window": 30,
+        "magnitude_scale": "linear",
+        "magnitude_display": "traces",
+        "evolution_window": 300,
+        "evolution_metric": "mean_amplitude"
+      },
+      "5": {
+        "console_autoscroll": true,
+        "iq_window": 60,
+        "spectrogram_window": 150,
+        "spectrogram_metric": "phase_delta",
+        "phase_window": 30,
+        "phase_mode": "unwrapped",
+        "phase_display": "traces",
+        "magnitude_window": 30,
+        "magnitude_scale": "linear",
+        "magnitude_display": "traces",
+        "evolution_window": 900,
+        "evolution_metric": "delta_amplitude"
+      }
+    }
+  }
+}

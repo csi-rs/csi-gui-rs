@@ -21,6 +21,6 @@ pub mod preprocess;
 pub mod stats;
 
 pub use csi::CsiData;
-pub use history::{DEFAULT_HISTORY_CAP, History};
+pub use history::{DEFAULT_HISTORY_CAP, History, TICK_MS};
 pub use preprocess::PreprocessConfig;
 pub use stats::NetworkStats;

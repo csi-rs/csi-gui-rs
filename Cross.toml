@@ -1,0 +1,14 @@
+# cross-rs config for the Linux release targets (`cross build --target …`).
+# The GUI links libudev (serialport's port enumeration), so the container
+# needs the target-arch dev package.
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get install --assume-yes libudev-dev:$CROSS_DEB_ARCH",
+]
+
+[target.armv7-unknown-linux-gnueabihf]
+pre-build = [
+    "dpkg --add-architecture $CROSS_DEB_ARCH",
+    "apt-get update && apt-get install --assume-yes libudev-dev:$CROSS_DEB_ARCH",
+]

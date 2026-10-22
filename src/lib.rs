@@ -1,69 +1,73 @@
 //! # csi-gui-rs
 //!
 //! A desktop GUI library and binary for capturing, visualizing, and exporting
-//! Wi-Fi Channel-State-Information (CSI) packets emitted by ESP32 devices
+//! Wi-Fi Channel State Information (CSI) from **one or many** ESP32 boards
 //! running the [`esp-csi-cli-rs`] firmware.
 //!
 //! [`esp-csi-cli-rs`]: https://github.com/csi-rs/esp-csi-cli-rs
 //!
 //! Most users only need the `csi-gui-rs` binary (`cargo install csi-gui-rs`);
-//! this library crate exists so the same building blocks (serial reader,
-//! parsers, history buffer, visualizations, Rerun sink, persistence) can be
-//! reused in other tools or wrapped in custom front-ends.
+//! this library crate exists so the same building blocks (device manager,
+//! serial reader, decoders, history buffer, visualizations, Rerun sink,
+//! persistence) can be reused in other tools or wrapped in custom front-ends.
+//!
+//! ## Firmware compatibility
+//!
+//! | csi-gui-rs | esp-csi-cli-rs | CLI protocol | Serialized format |
+//! |---|---|---|---|
+//! | 2.0 | 0.10.x (recommended), 0.9 | 4, 3 | wire v1 (esp-csi-rs 0.12+), pre-0.12 legacy decoded too |
 //!
 //! ## At a glance
 //!
-//! - **Auto-connect** to the first available serial port. The [`reader`]
-//!   thread resets the chip via DTR/RTS, identifies the firmware via the
-//!   `info` command, and decodes CSI in any of four wire formats (text,
-//!   serialized/COBS, array-list, esp-csi-tool CSV). All formats normalize
-//!   into the same [`CsiData`] struct.
-//! - **In-memory tick window** ([`History`]) holds per-100 ms aggregates for
-//!   live plots; configurable via [`data::DEFAULT_HISTORY_CAP`] or
-//!   `--history-size`. Optional JSONL recording streams full captures to disk.
-//! - **Visualizations** in [`views`] use [`egui_plot`](https://docs.rs/egui_plot)
-//!   for high-resolution 2D rendering. Every plot is flat 2D — no fake 3D
-//!   rotations — and exposes proper axes, zoom, pan, and tooltips.
-//! - **Global replay** ([`views::ReplayState`]) anchors all panes to a
-//!   historic packet id; setting it back to `None` snaps every pane to LIVE.
-//! - **CSV export** ([`persistence::export_history_csv`]) writes a single
-//!   uniform 22-column schema regardless of the wire format that originally
-//!   produced the data.
-//! - **Optional Rerun integration** ([`rerun_sink`], gated behind the `rerun`
-//!   Cargo feature) logs every decoded packet to a [Rerun](https://rerun.io)
-//!   viewer or an `.rrd` file.
+//! - **Many devices at once.** [`device::DeviceManager`] runs one
+//!   [`device::DeviceSession`] per board, each with its own reader thread,
+//!   history, preprocessing context and recorder. Boards are discovered by
+//!   USB vendor, named by MAC, followed across re-enumeration, and remember
+//!   their alias and config ([`device::store`]). "Start all" runs every
+//!   board under one shared measurement session (`set-session`), so their
+//!   frames line up.
+//! - **Every wire format.** The [`reader`] identifies the firmware via
+//!   `info` and decodes serialized (the esp-csi-rs [`protocol::wire`]
+//!   contract, vendored), array-list, text and esp-csi-tool output into one
+//!   [`CsiData`] struct, stamped with the device it came from.
+//! - **Per-pane device binding.** Every pane in the tiling layout shows the
+//!   active device or a specific one; the Devices view and the Evolution
+//!   overlay compare them.
+//! - **Capture files.** Per-device JSONL recording while collecting, and
+//!   export / import as CSV, JSONL or Parquet ([`persistence::export`]).
+//! - **Optional Rerun integration** ([`rerun_sink`], Cargo feature
+//!   `rerun`), one entity tree per device.
+//! - **Headless probe** ([`probe`]) and a **simulated device** ([`sim`]) for
+//!   testing without the GUI or without hardware.
 //!
 //! [`CsiData`]: crate::data::CsiData
-//! [`History`]: crate::data::History
 //!
-//! ## Quick example — running the GUI
-//!
-//! The binary entry point parses CLI flags and starts the eframe app:
+//! ## Example — the device pipeline without the GUI
 //!
 //! ```no_run
-//! use csi_gui_rs::app::App;
-//! use csi_gui_rs::data::DEFAULT_HISTORY_CAP;
-//! use csi_gui_rs::rerun_sink::Transport;
-//! use csi_gui_rs::shared::DEFAULT_BAUD;
+//! use csi_gui_rs::data::PreprocessConfig;
+//! use csi_gui_rs::device::DeviceManager;
+//! use csi_gui_rs::rerun_sink::{RerunSink, Transport};
 //!
-//! eframe::run_native(
-//!     "csi-gui-rs",
-//!     eframe::NativeOptions::default(),
-//!     Box::new(|cc| {
-//!         Ok(Box::new(App::new(
-//!             cc,
-//!             DEFAULT_BAUD,
-//!             DEFAULT_HISTORY_CAP,
-//!             Transport::Off,
-//!         )))
-//!     }),
-//! ).unwrap();
+//! let mut devices = DeviceManager::new(115_200, 1_000);
+//! devices.rescan();
+//! devices.attach_all(); // every ESP32-looking serial port
+//! let mut rerun = RerunSink::new(Transport::Off);
+//! loop {
+//!     for notice in devices.pump() {
+//!         println!("{notice:?}");
+//!     }
+//!     devices.tick(&PreprocessConfig::default(), &mut rerun);
+//!     for s in &devices.sessions {
+//!         if let Some(csi) = s.history.last().and_then(|t| t.csi.as_ref()) {
+//!             println!("{}: {} subcarriers, {} dBm", s.label(), csi.subcarriers(), csi.rssi);
+//!         }
+//!     }
+//!     std::thread::sleep(std::time::Duration::from_millis(100));
+//! }
 //! ```
 //!
-//! ## Quick example — using the reader without the GUI
-//!
-//! If you only want decoded CSI packets — say, to feed your own model or
-//! pipeline — spawn the reader directly and pump the channel:
+//! ## Example — one reader, raw packets
 //!
 //! ```no_run
 //! use std::sync::Arc;
@@ -72,21 +76,10 @@
 //! use csi_gui_rs::reader::spawn_reader;
 //! use csi_gui_rs::shared::EspSharedState;
 //!
-//! let shared = EspSharedState::handle();
-//! let console = Arc::new(RawConsole::new(2_000));
-//! let handles = spawn_reader(shared.clone(), console);
-//!
-//! handles.commands
-//!     .send(EspCommand::OpenPort("/dev/ttyUSB0".into()))
-//!     .unwrap();
-//!
+//! let handles = spawn_reader(EspSharedState::handle(), Arc::new(RawConsole::new(2_000)));
+//! handles.commands.send(EspCommand::OpenPort("/dev/ttyUSB0".into())).unwrap();
 //! while let Ok(packet) = handles.packets.recv() {
-//!     if packet.is_decoded() {
-//!         println!(
-//!             "MAC={} RSSI={} subcarriers={}",
-//!             packet.mac, packet.rssi, packet.subcarriers()
-//!         );
-//!     }
+//!     println!("{} from {}: {} subcarriers", packet.device, packet.mac, packet.subcarriers());
 //! }
 //! ```
 //!
@@ -94,42 +87,39 @@
 //!
 //! | Feature | Default | What it adds |
 //! | ------- | ------- | ------------ |
-//! | `rerun` | off     | [`rerun_sink::RerunSink`] backed by the Rerun 0.19 SDK. With the feature off, the sink type still exists and exposes the same public API but all methods are no-ops, so call sites don't need conditional compilation. |
+//! | `rerun` | off     | [`rerun_sink::RerunSink`] backed by the Rerun SDK. With the feature off the sink still exists with the same API, as no-ops, so call sites need no conditional compilation. |
 //!
 //! ## Module map
 //!
-//! - [`app`] — top-level eframe application: tiling layout, menu bar, status
-//!   bar, overlays, key handling.
-//! - [`reader`] — background thread that owns the serial port and decodes
-//!   the wire stream.
-//! - [`protocol`] — wire-level parsers, firmware identification, command
-//!   rendering.
-//! - [`data`] — in-memory CSI representation, ring-buffer history,
-//!   pre-computed per-tick stats, shared DSP helpers, the live
-//!   preprocessing pipeline.
-//! - [`views`] — every visualization pane (Dashboard, Magnitude, Phase,
-//!   Polar, CIR, Spectrogram, Evolution, I/Q Scatter, Console, Replay).
+//! - [`app`] — the eframe application: menus, status bar, device panel,
+//!   panes, overlays, command palette.
+//! - [`device`] — device sessions, the manager, discovery and saved settings.
+//! - [`reader`] — the per-device thread that owns a port and decodes it.
+//! - [`protocol`] — firmware identification, command rendering, decoders,
+//!   and the vendored [`protocol::wire`] contract.
+//! - [`data`] — [`CsiData`], the tick history, stats, DSP, preprocessing.
+//! - [`views`] — every visualization pane.
 //! - [`layout`] — tiling pane manager and persistable layout tree.
-//! - [`persistence`] — full-workspace JSON templates (layout + theme +
-//!   preprocessing + view-state knobs) and capture export/import in
-//!   CSV / JSONL / Parquet.
+//! - [`persistence`] — workspace templates and capture files.
+//! - [`paths`] — platform config / data directories.
+//! - [`probe`] — the headless `csi-gui-rs probe` command.
+//! - [`sim`] — a simulated esp-csi-cli-rs device.
 //! - [`rerun_sink`] — Rerun integration (Cargo feature `rerun`).
-//! - [`console`] — rolling raw-UART text buffer used by the Console view.
-//! - [`shared`] — lock-free state shared between the reader thread and the
-//!   UI thread.
-//! - [`ui`] — modal overlays (help, view/layout pickers, theme picker,
-//!   preprocessing, …) and the docked ESP device panel.
-//! - [`theme`] — color schemes.
+//! - [`console`], [`shared`], [`ui`], [`theme`] — support.
 
 pub mod app;
 pub mod console;
 pub mod data;
+pub mod device;
 pub mod layout;
+pub mod paths;
 pub mod persistence;
+pub mod probe;
 pub mod protocol;
 pub mod reader;
 pub mod rerun_sink;
 pub mod shared;
+pub mod sim;
 pub mod theme;
 pub mod ui;
 pub mod views;

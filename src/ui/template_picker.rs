@@ -9,7 +9,7 @@ pub struct TemplatePicker {
 
 pub enum TemplatePickerResult {
     None,
-    Load(std::path::PathBuf),
+    Load(Box<crate::persistence::Template>),
     MakeDefault(String),
     Cancel,
 }
@@ -37,7 +37,8 @@ impl TemplatePicker {
                 for (i, entry) in self.entries.iter().enumerate() {
                     let selected = i == self.selected;
                     let default_marker = if entry.is_default { " ★" } else { "" };
-                    let label = format!("{}{}", entry.name, default_marker);
+                    let builtin = if entry.is_builtin() { "  (built-in)" } else { "" };
+                    let label = format!("{}{}{}", entry.name, default_marker, builtin);
                     let text = if selected {
                         egui::RichText::new(format!("▶ {label}")).strong()
                     } else {
@@ -59,7 +60,9 @@ impl TemplatePicker {
                     }
                     if i.key_pressed(egui::Key::Enter) {
                         if let Some(e) = self.entries.get(self.selected) {
-                            result = TemplatePickerResult::Load(e.path.clone());
+                            if let Ok(tpl) = e.load() {
+                                result = TemplatePickerResult::Load(Box::new(tpl));
+                            }
                             still_open = false;
                         }
                     }

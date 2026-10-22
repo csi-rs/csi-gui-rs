@@ -5,7 +5,8 @@
 //! rendering with proper axes, zoom, pan, and tooltips. All panes are flat
 //! 2D — there is no pseudo-3D camera state.
 //!
-//! - [`dashboard`] — firmware + collection summary, PPS / SNR / RSSI gauges.
+//! - [`dashboard`] — one device: firmware, link health, PPS / SNR / RSSI gauges.
+//! - [`devices`] — every connected device in one table.
 //! - [`magnitude`] — `|H(k)|` vs subcarrier; linear or dB; traces or
 //!   mean ± σ envelope.
 //! - [`phase`] — `∠H(k)` vs subcarrier; raw / unwrapped / linear-detrended.
@@ -26,6 +27,7 @@ pub mod colormap;
 pub mod console;
 /// Firmware/PPS/SNR/RSSI overview pane.
 pub mod dashboard;
+pub mod devices;
 /// Long-window per-packet scalar-over-time pane.
 pub mod evolution;
 /// Channel impulse response pane (IDFT).
@@ -92,24 +94,50 @@ impl Default for ReplayState {
 /// Borrow bundle every view receives from `App::render_pane`. Aliases
 /// what each pane needs without giving it ownership of `App`.
 pub struct ViewCtx<'a> {
-    /// Read-only access to the per-tick history.
+    /// History of the device this pane shows.
     pub history: &'a History,
-    /// Read-only access to the shared lock-free state (counters, flags).
+    /// That device's counters.
     pub shared: &'a Arc<EspSharedState>,
-    /// Raw UART text capture — only the Console view reads it.
+    /// That device's text output.
     pub console: &'a Arc<RawConsole>,
-    /// Global replay control. Mutable so Replay-related views can drive it.
+    /// Global replay anchor.
     pub replay: &'a mut ReplayState,
-    /// Last-known firmware identification, or `None` if not identified.
+    /// That device's identity, once known.
     pub device: Option<&'a DeviceInfo>,
-    /// Active color theme.
+    /// That device's display name (empty when there is no device).
+    pub device_label: &'a str,
+    /// That device's series colour.
+    pub device_color: egui::Color32,
+    /// Every device, for the Devices view and cross-device overlays.
+    pub devices: &'a [DeviceView<'a>],
     pub theme: &'a Theme,
-    /// Per-pane state (window sizes, mode selectors, etc.).
     pub view_state: &'a mut ViewState,
-    /// `true` when this pane has keyboard/input focus.
     pub focused: bool,
-    /// Vertical space left for view content below the pane header (px).
     pub plot_budget: f32,
+}
+
+/// Read-only snapshot of one device, for views that look across devices.
+pub struct DeviceView<'a> {
+    /// Display name.
+    pub label: String,
+    /// Series colour.
+    pub color: egui::Color32,
+    /// Port name.
+    pub port: &'a str,
+    /// Connection state.
+    pub state: &'a crate::reader::ConnState,
+    /// Identity, once known.
+    pub info: Option<&'a DeviceInfo>,
+    /// Its config (mode, channel).
+    pub cfg: &'a crate::protocol::config::EspConfig,
+    /// Its history.
+    pub history: &'a History,
+    /// Its counters.
+    pub shared: &'a Arc<EspSharedState>,
+    /// Currently writing a recording.
+    pub recording: bool,
+    /// Live device (false for an imported capture).
+    pub live: bool,
 }
 
 impl ViewCtx<'_> {
@@ -174,6 +202,7 @@ pub fn render_view(view: ViewType, ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     match view {
         ViewType::Empty => empty(ui),
         ViewType::Dashboard => dashboard::render(ui, ctx),
+        ViewType::Devices => devices::render(ui, ctx),
         ViewType::Polar => polar::render(ui, ctx),
         ViewType::Isometric => isometric::render(ui, ctx),
         ViewType::Spectrogram => spectrogram::render(ui, ctx),
@@ -200,6 +229,10 @@ pub fn title_bar(ui: &mut egui::Ui, title: &str, ctx: &ViewCtx<'_>) {
     let replay = ctx.replay.anchor.is_some();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(title).heading());
+        if !ctx.device_label.is_empty() {
+            ui.label(egui::RichText::new("●").color(ctx.device_color));
+            ui.label(egui::RichText::new(ctx.device_label).weak());
+        }
         if replay {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.colored_label(

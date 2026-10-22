@@ -10,6 +10,8 @@ pub enum SplitDirection {
 pub enum ViewType {
     Empty,
     Dashboard,
+    /// Every connected device in one table.
+    Devices,
     Polar,
     Isometric,
     Spectrogram,
@@ -31,6 +33,7 @@ impl Serialize for ViewType {
         s.serialize_str(match self {
             ViewType::Empty => "Empty",
             ViewType::Dashboard => "Dashboard",
+            ViewType::Devices => "Devices",
             ViewType::Polar => "Polar",
             ViewType::Isometric => "Isometric",
             ViewType::Spectrogram => "Spectrogram",
@@ -50,6 +53,7 @@ impl<'de> Deserialize<'de> for ViewType {
         Ok(match raw.as_str() {
             "Empty" => ViewType::Empty,
             "Dashboard" => ViewType::Dashboard,
+            "Devices" => ViewType::Devices,
             "Polar" => ViewType::Polar,
             "Isometric" => ViewType::Isometric,
             "Spectrogram" => ViewType::Spectrogram,
@@ -84,8 +88,9 @@ impl<'de> Deserialize<'de> for ViewType {
 }
 
 impl ViewType {
-    pub const ALL_SELECTABLE: [ViewType; 10] = [
+    pub const ALL_SELECTABLE: [ViewType; 11] = [
         ViewType::Dashboard,
+        ViewType::Devices,
         ViewType::Magnitude,
         ViewType::Phase,
         ViewType::Polar,
@@ -101,6 +106,7 @@ impl ViewType {
         match self {
             ViewType::Empty => "Empty",
             ViewType::Dashboard => "Dashboard",
+            ViewType::Devices => "Devices",
             ViewType::Polar => "Polar",
             ViewType::Isometric => "Isometric (CIR)",
             ViewType::Spectrogram => "Spectrogram",

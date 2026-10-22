@@ -29,15 +29,19 @@
 //!
 //! # Entity layout
 //!
-//! Per packet (timeline `frame_idx`):
-//! - `csi/bar_amplitude` — `BarChart` of `|H(k)|`
-//! - `csi/complex_scatter` — `Points3D` `(I, Q, |H|)`, color by phase
-//! - `csi/cir` — `BarChart` of channel impulse response amplitude
-//! - `csi/heatmap` — rolling u8 `Tensor[H, W]` (up to 500 rows)
-//! - `csi/scalars/rssi`, `csi/scalars/noise_floor`
+//! Every device logs under its own root, `csi/<device>/`, where `<device>`
+//! is its MAC with `:` replaced by `-` (see [`entity_root`]), so several
+//! boards sit side by side in one viewer.
 //!
-//! Per UI tick (timeline `tick_idx`):
-//! - `csi/scalars/pps`, `csi/scalars/snr`, `csi/scalars/tick_rssi`
+//! Per packet (timeline `frame_idx`, counted per device):
+//! - `csi/<device>/bar_amplitude` — `BarChart` of `|H(k)|`
+//! - `csi/<device>/complex_scatter` — `Points3D` `(I, Q, |H|)`, color by phase
+//! - `csi/<device>/cir` — `BarChart` of channel impulse response amplitude
+//! - `csi/<device>/heatmap` — rolling u8 `Tensor[H, W]` (up to 500 rows)
+//! - `csi/<device>/scalars/rssi`, `…/scalars/noise_floor`
+//!
+//! Per UI tick (timeline `tick_idx`, shared by all devices):
+//! - `csi/<device>/scalars/pps`, `…/scalars/snr`, `…/scalars/tick_rssi`
 //!
 //! # Example
 //!
@@ -124,14 +128,29 @@ pub struct RerunSink {
 
     #[cfg(feature = "rerun")]
     rec: Option<rerun::RecordingStream>,
+    /// Rolling heatmap and frame counter, per device root.
     #[cfg(feature = "rerun")]
+    devices: std::collections::HashMap<String, DeviceStream>,
+}
+
+/// Per-device rolling state.
+#[cfg(feature = "rerun")]
+#[derive(Default)]
+struct DeviceStream {
     heatmap_buf: VecDeque<Vec<u8>>,
-    #[cfg(feature = "rerun")]
     heatmap_width: usize,
-    #[cfg(feature = "rerun")]
     rolling_max: f32,
-    #[cfg(feature = "rerun")]
     frame_idx: u64,
+}
+
+/// Entity-path root for a device id: `csi/A0-85-E3-F5-48-90`. Packets
+/// with no device (imports from before 2.0) log under plain `csi`.
+pub fn entity_root(device: &str) -> String {
+    if device.is_empty() {
+        "csi".to_string()
+    } else {
+        format!("csi/{}", crate::paths::sanitize_file_stem(device))
+    }
 }
 
 impl RerunSink {
@@ -152,13 +171,7 @@ impl RerunSink {
             #[cfg(feature = "rerun")]
             rec: None,
             #[cfg(feature = "rerun")]
-            heatmap_buf: VecDeque::with_capacity(ROLLING_HEATMAP_ROWS),
-            #[cfg(feature = "rerun")]
-            heatmap_width: 0,
-            #[cfg(feature = "rerun")]
-            rolling_max: 0.0,
-            #[cfg(feature = "rerun")]
-            frame_idx: 0,
+            devices: std::collections::HashMap::new(),
         };
         sink.set_transport(transport);
         sink
@@ -228,10 +241,10 @@ impl RerunSink {
     /// hidden or overwritten.
     pub fn mark_session_boundary(&mut self) {
         #[cfg(feature = "rerun")]
-        {
-            self.heatmap_buf.clear();
-            self.heatmap_width = 0;
-            self.rolling_max = 0.0;
+        for dev in self.devices.values_mut() {
+            dev.heatmap_buf.clear();
+            dev.heatmap_width = 0;
+            dev.rolling_max = 0.0;
         }
     }
 
@@ -249,10 +262,7 @@ impl RerunSink {
         self.rrd_recording = false;
         #[cfg(feature = "rerun")]
         {
-            self.frame_idx = 0;
-            self.heatmap_buf.clear();
-            self.heatmap_width = 0;
-            self.rolling_max = 0.0;
+            self.devices.clear();
             self.rec = match &t {
                 Transport::Off => None,
                 Transport::Spawn => match build_spawn() {
@@ -314,17 +324,19 @@ impl RerunSink {
             // Pre-compute everything that needs `&mut self` (heatmap rolling
             // state) before borrowing `self.rec` as `&` for log calls.
             let amps_f32: Vec<f32> = (0..n).map(|k| p.amplitude(k)).collect();
-            self.update_heatmap(&amps_f32, n);
-            let tensor = self.build_heatmap_tensor();
-            let frame_idx = self.frame_idx;
-            self.frame_idx = self.frame_idx.wrapping_add(1);
+            let root = entity_root(&p.device);
+            let dev = self.devices.entry(root.clone()).or_default();
+            dev.update_heatmap(&amps_f32, n);
+            let tensor = dev.build_heatmap_tensor();
+            let frame_idx = dev.frame_idx;
+            dev.frame_idx = dev.frame_idx.wrapping_add(1);
 
             let rec = self.rec.clone().expect("checked is_none above");
             rec.set_time_sequence("frame_idx", frame_idx as i64);
 
-            // 1. csi/bar_amplitude — per-subcarrier |H(k)|.
+            // 1. bar_amplitude — per-subcarrier |H(k)|.
             let amps: Vec<f64> = amps_f32.iter().map(|&v| v as f64).collect();
-            let _ = rec.log("csi/bar_amplitude", &rerun::BarChart::new(amps));
+            let _ = rec.log(format!("{root}/bar_amplitude"), &rerun::BarChart::new(amps));
 
             // 2. csi/complex_scatter — (I, Q, amplitude) with phase-colored points.
             let positions: Vec<[f32; 3]> = (0..n)
@@ -335,26 +347,26 @@ impl RerunSink {
                 .collect();
             let colors: Vec<[u8; 4]> = (0..n).map(|k| dsp::phase_to_rgba(p.phase(k))).collect();
             let _ = rec.log(
-                "csi/complex_scatter",
+                format!("{root}/complex_scatter"),
                 &rerun::Points3D::new(positions).with_colors(colors),
             );
 
-            // 3. csi/cir — per-tap impulse response (free, since we have IDFT).
+            // 3. cir — per-tap impulse response (free, since we have IDFT).
             let cir = dsp::compute_cir(p);
             if !cir.is_empty() {
                 let cir_f64: Vec<f64> = cir.iter().map(|&v| v as f64).collect();
-                let _ = rec.log("csi/cir", &rerun::BarChart::new(cir_f64));
+                let _ = rec.log(format!("{root}/cir"), &rerun::BarChart::new(cir_f64));
             }
 
-            // 4. csi/heatmap — rolling normalized u8 tensor [rows, n].
+            // 4. heatmap — rolling normalized u8 tensor [rows, n].
             if let Some(tensor) = tensor {
-                let _ = rec.log("csi/heatmap", &tensor);
+                let _ = rec.log(format!("{root}/heatmap"), &tensor);
             }
 
-            // 5. csi/scalars — per-packet RSSI/noise floor.
-            let _ = rec.log("csi/scalars/rssi", &rerun::Scalars::new([p.rssi as f64]));
+            // 5. scalars — per-packet RSSI/noise floor.
+            let _ = rec.log(format!("{root}/scalars/rssi"), &rerun::Scalars::new([p.rssi as f64]));
             let _ = rec.log(
-                "csi/scalars/noise_floor",
+                format!("{root}/scalars/noise_floor"),
                 &rerun::Scalars::new([p.noise_floor as f64]),
             );
         }
@@ -364,29 +376,30 @@ impl RerunSink {
         }
     }
 
-    /// Forward one per-tick stats aggregate (PPS, SNR, RSSI). Called by
-    /// `App::pump_reader` after [`History::push_tick`] produces a fresh
-    /// [`NetworkStats`]. Uses the `tick_idx` timeline.
+    /// Forward one device's per-tick stats aggregate (PPS, SNR, RSSI),
+    /// produced by [`History::push_tick_at`]. Uses the shared `tick_idx`
+    /// timeline.
     ///
-    /// [`History::push_tick`]: crate::data::History::push_tick
-    pub fn log_tick(&mut self, stats: &NetworkStats) {
+    /// [`History::push_tick_at`]: crate::data::History::push_tick_at
+    pub fn log_tick(&mut self, device: &str, stats: &NetworkStats) {
         #[cfg(feature = "rerun")]
         {
             if !self.live_streaming {
                 return;
             }
             let Some(rec) = self.rec.as_ref() else { return };
+            let root = entity_root(device);
             rec.set_time_sequence("tick_idx", stats.id as i64);
-            let _ = rec.log("csi/scalars/pps", &rerun::Scalars::new([stats.pps as f64]));
-            let _ = rec.log("csi/scalars/snr", &rerun::Scalars::new([stats.snr as f64]));
+            let _ = rec.log(format!("{root}/scalars/pps"), &rerun::Scalars::new([stats.pps as f64]));
+            let _ = rec.log(format!("{root}/scalars/snr"), &rerun::Scalars::new([stats.snr as f64]));
             let _ = rec.log(
-                "csi/scalars/tick_rssi",
+                format!("{root}/scalars/tick_rssi"),
                 &rerun::Scalars::new([stats.rssi as f64]),
             );
         }
         #[cfg(not(feature = "rerun"))]
         {
-            let _ = stats;
+            let _ = (device, stats);
         }
     }
 
@@ -428,7 +441,10 @@ impl RerunSink {
         }
     }
 
-    #[cfg(feature = "rerun")]
+}
+
+#[cfg(feature = "rerun")]
+impl DeviceStream {
     fn update_heatmap(&mut self, amps: &[f32], width: usize) {
         if width != self.heatmap_width {
             self.heatmap_buf.clear();
@@ -466,7 +482,6 @@ impl RerunSink {
         self.heatmap_buf.push_back(row);
     }
 
-    #[cfg(feature = "rerun")]
     fn build_heatmap_tensor(&self) -> Option<rerun::Tensor> {
         if self.heatmap_buf.is_empty() || self.heatmap_width == 0 {
             return None;
@@ -535,9 +550,9 @@ fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
 /// # use csi_gui_rs::rerun_sink::export_history_to_rrd;
 /// let history = History::new();
 /// let path = PathBuf::from("exports/history.rrd");
-/// export_history_to_rrd(&history, &path).unwrap();
+/// export_history_to_rrd(&[("A0:85:E3:F5:48:90", &history)], &path).unwrap();
 /// ```
-pub fn export_history_to_rrd(history: &History, path: &Path) -> Result<(), String> {
+pub fn export_history_to_rrd(histories: &[(&str, &History)], path: &Path) -> Result<(), String> {
     #[cfg(feature = "rerun")]
     {
         if let Some(parent) = path.parent() {
@@ -549,6 +564,8 @@ pub fn export_history_to_rrd(history: &History, path: &Path) -> Result<(), Strin
             .save(path)
             .map_err(|e| e.to_string())?;
 
+        for (device, history) in histories {
+        let root = entity_root(device);
         let mut frame_idx: u64 = 0;
         for stats in history.entries.iter() {
             let Some(csi) = stats.csi.as_ref() else { continue };
@@ -560,7 +577,7 @@ pub fn export_history_to_rrd(history: &History, path: &Path) -> Result<(), Strin
             rec.set_time_sequence("tick_idx", stats.id as i64);
 
             let amps: Vec<f64> = (0..n).map(|k| csi.amplitude(k) as f64).collect();
-            let _ = rec.log("csi/bar_amplitude", &rerun::BarChart::new(amps));
+            let _ = rec.log(format!("{root}/bar_amplitude"), &rerun::BarChart::new(amps));
 
             let positions: Vec<[f32; 3]> = (0..n)
                 .map(|k| {
@@ -571,28 +588,29 @@ pub fn export_history_to_rrd(history: &History, path: &Path) -> Result<(), Strin
             let colors: Vec<[u8; 4]> =
                 (0..n).map(|k| dsp::phase_to_rgba(csi.phase(k))).collect();
             let _ = rec.log(
-                "csi/complex_scatter",
+                format!("{root}/complex_scatter"),
                 &rerun::Points3D::new(positions).with_colors(colors),
             );
 
             let cir = dsp::compute_cir(csi);
             if !cir.is_empty() {
                 let cir_f64: Vec<f64> = cir.iter().map(|&v| v as f64).collect();
-                let _ = rec.log("csi/cir", &rerun::BarChart::new(cir_f64));
+                let _ = rec.log(format!("{root}/cir"), &rerun::BarChart::new(cir_f64));
             }
 
-            let _ = rec.log("csi/scalars/rssi", &rerun::Scalars::new([stats.rssi as f64]));
-            let _ = rec.log("csi/scalars/snr", &rerun::Scalars::new([stats.snr as f64]));
-            let _ = rec.log("csi/scalars/pps", &rerun::Scalars::new([stats.pps as f64]));
+            let _ = rec.log(format!("{root}/scalars/rssi"), &rerun::Scalars::new([stats.rssi as f64]));
+            let _ = rec.log(format!("{root}/scalars/snr"), &rerun::Scalars::new([stats.snr as f64]));
+            let _ = rec.log(format!("{root}/scalars/pps"), &rerun::Scalars::new([stats.pps as f64]));
 
             frame_idx += 1;
+        }
         }
         let _ = rec.flush_blocking();
         Ok(())
     }
     #[cfg(not(feature = "rerun"))]
     {
-        let _ = (history, path);
+        let _ = (histories, path);
         Err("built without --features rerun".into())
     }
 }
