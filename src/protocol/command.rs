@@ -94,7 +94,10 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     }
     if mode == WifiMode::Station {
         if !cfg.sta_ssid.is_empty() {
-            out.push(format!("set-wifi --sta-ssid={}", quote_for_wire(&cfg.sta_ssid)));
+            out.push(format!(
+                "set-wifi --sta-ssid={}",
+                quote_for_wire(&cfg.sta_ssid)
+            ));
         }
         if !cfg.sta_password.is_empty() {
             out.push(format!(
@@ -105,7 +108,10 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     }
     if mode == WifiMode::WifiAp {
         if !cfg.ap_ssid.is_empty() {
-            out.push(format!("set-wifi --ap-ssid={}", quote_for_wire(&cfg.ap_ssid)));
+            out.push(format!(
+                "set-wifi --ap-ssid={}",
+                quote_for_wire(&cfg.ap_ssid)
+            ));
         }
         if !cfg.ap_password.is_empty() {
             out.push(format!(
@@ -166,7 +172,11 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
     let filter_peer = cfg.csi_filter_peer.trim();
     out.push(format!(
         "set-csi-filter --peer-mac={} --min-phy={}",
-        if filter_peer.is_empty() { "any" } else { filter_peer },
+        if filter_peer.is_empty() {
+            "any"
+        } else {
+            filter_peer
+        },
         cfg.csi_filter_min_phy.cli()
     ));
     out.push(format!("set-rate --rate={}", cfg.phy_rate.cli()));
@@ -214,7 +224,10 @@ pub fn render_apply_config(cfg: &EspConfig, chip: ChipFamily) -> Vec<String> {
             ];
             // C5-only acquisition toggles.
             if chip == ChipFamily::Esp32C5 {
-                parts.push(format!("--csi-force-lltf={}", on_off(cfg.c5_csi_force_lltf)));
+                parts.push(format!(
+                    "--csi-force-lltf={}",
+                    on_off(cfg.c5_csi_force_lltf)
+                ));
                 parts.push(format!("--csi-vht={}", on_off(cfg.c5_csi_vht)));
             }
             out.push(parts.join(" "));
@@ -249,11 +262,7 @@ pub fn render_restart() -> String {
 }
 
 fn on_off(b: bool) -> &'static str {
-    if b {
-        "on"
-    } else {
-        "off"
-    }
+    if b { "on" } else { "off" }
 }
 
 /// Per §2.3 — quote with `'…'` and encode embedded spaces as `0x1F` (US).
@@ -272,7 +281,7 @@ fn quote_for_wire(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::protocol::config::{CsiDelivery, Ht40, Reporting};
-    use crate::protocol::profile::{install_profile, CsiProfile};
+    use crate::protocol::profile::{CsiProfile, install_profile};
 
     #[test]
     fn emitter_emits_destination_mac() {
@@ -378,7 +387,11 @@ mod tests {
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
         assert!(lines.contains(&"set-wifi --peer-mac=aa:bb:cc:dd:ee:ff".to_string()));
         assert!(lines.contains(&"set-wifi --ht40=below".to_string()));
-        assert!(lines.iter().any(|l| l.starts_with("set-reporting --policy=report")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("set-reporting --policy=report"))
+        );
     }
 
     #[test]
@@ -413,7 +426,9 @@ mod tests {
             ..Default::default()
         };
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
-        assert!(lines.contains(&"set-measurement --periodicity-hz=250 --unsolicited=on".to_string()));
+        assert!(
+            lines.contains(&"set-measurement --periodicity-hz=250 --unsolicited=on".to_string())
+        );
         assert!(!lines.iter().any(|l| l.starts_with("set-traffic")));
     }
 
@@ -510,8 +525,17 @@ mod tests {
     #[test]
     fn c5c6_set_csi_carries_he_flags() {
         let lines = render_apply_config(&EspConfig::default(), ChipFamily::Esp32C6);
-        let csi = lines.iter().find(|l| l.starts_with("set-csi --csi=")).unwrap();
-        for flag in ["--csi-su=on", "--csi-mu=on", "--csi-dcm=on", "--csi-beamformed=on", "--csi-he-stbc=off"] {
+        let csi = lines
+            .iter()
+            .find(|l| l.starts_with("set-csi --csi="))
+            .unwrap();
+        for flag in [
+            "--csi-su=on",
+            "--csi-mu=on",
+            "--csi-dcm=on",
+            "--csi-beamformed=on",
+            "--csi-he-stbc=off",
+        ] {
             assert!(csi.contains(flag), "{csi} lacks {flag}");
         }
         assert!(!csi.contains("--csi-vht"), "VHT is C5-only");
@@ -519,14 +543,25 @@ mod tests {
 
     #[test]
     fn ap_extras_and_emitter_period_only_in_their_modes() {
-        let ap = EspConfig { wifi_mode: WifiMode::WifiAp, ap_leases: 6, ap_burst: true, ..Default::default() };
+        let ap = EspConfig {
+            wifi_mode: WifiMode::WifiAp,
+            ap_leases: 6,
+            ap_burst: true,
+            ..Default::default()
+        };
         let lines = render_apply_config(&ap, ChipFamily::Esp32);
         assert!(lines.contains(&"set-wifi --ap-dhcp=on --ap-leases=6 --ap-burst=on".to_string()));
         assert!(!lines.iter().any(|l| l.contains("--inject-period")));
 
-        let em = EspConfig { wifi_mode: WifiMode::Ht20Emitter, inject_period_us: 5000, ..Default::default() };
+        let em = EspConfig {
+            wifi_mode: WifiMode::Ht20Emitter,
+            inject_period_us: 5000,
+            ..Default::default()
+        };
         let lines = render_apply_config(&em, ChipFamily::Esp32);
-        assert!(lines.contains(&"set-wifi --inject-period-us=5000 --emitter-iface=sta".to_string()));
+        assert!(
+            lines.contains(&"set-wifi --inject-period-us=5000 --emitter-iface=sta".to_string())
+        );
         assert!(!lines.iter().any(|l| l.contains("--ap-dhcp")));
     }
 
@@ -534,9 +569,15 @@ mod tests {
     fn csi_filter_blank_means_any() {
         let lines = render_apply_config(&EspConfig::default(), ChipFamily::Esp32);
         assert!(lines.contains(&"set-csi-filter --peer-mac=any --min-phy=any".to_string()));
-        let cfg = EspConfig { csi_filter_peer: "aa:bb:cc:dd:ee:ff".into(), ..Default::default() };
+        let cfg = EspConfig {
+            csi_filter_peer: "aa:bb:cc:dd:ee:ff".into(),
+            ..Default::default()
+        };
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
-        assert!(lines.contains(&"set-csi-filter --peer-mac=aa:bb:cc:dd:ee:ff --min-phy=any".to_string()));
+        assert!(
+            lines
+                .contains(&"set-csi-filter --peer-mac=aa:bb:cc:dd:ee:ff --min-phy=any".to_string())
+        );
     }
 
     #[test]
@@ -561,6 +602,10 @@ mod tests {
             ..Default::default()
         };
         let lines = render_apply_config(&cfg, ChipFamily::Esp32);
-        assert!(lines.iter().any(|l| l.starts_with("set-csi-delivery --mode=raw")));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("set-csi-delivery --mode=raw"))
+        );
     }
 }

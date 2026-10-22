@@ -1,4 +1,4 @@
-use crate::persistence::{list_templates, TemplateEntry};
+use crate::persistence::{TemplateEntry, list_templates};
 
 #[derive(Default)]
 pub struct TemplatePicker {
@@ -37,7 +37,11 @@ impl TemplatePicker {
                 for (i, entry) in self.entries.iter().enumerate() {
                     let selected = i == self.selected;
                     let default_marker = if entry.is_default { " ★" } else { "" };
-                    let builtin = if entry.is_builtin() { "  (built-in)" } else { "" };
+                    let builtin = if entry.is_builtin() {
+                        "  (built-in)"
+                    } else {
+                        ""
+                    };
                     let label = format!("{}{}{}", entry.name, default_marker, builtin);
                     let text = if selected {
                         egui::RichText::new(format!("▶ {label}")).strong()
@@ -59,16 +63,18 @@ impl TemplatePicker {
                             (self.selected + self.entries.len() - 1) % self.entries.len();
                     }
                     if i.key_pressed(egui::Key::Enter)
-                        && let Some(e) = self.entries.get(self.selected) {
-                            if let Ok(tpl) = e.load() {
-                                result = TemplatePickerResult::Load(Box::new(tpl));
-                            }
-                            still_open = false;
+                        && let Some(e) = self.entries.get(self.selected)
+                    {
+                        if let Ok(tpl) = e.load() {
+                            result = TemplatePickerResult::Load(Box::new(tpl));
                         }
+                        still_open = false;
+                    }
                     if i.key_pressed(egui::Key::D)
-                        && let Some(e) = self.entries.get(self.selected) {
-                            result = TemplatePickerResult::MakeDefault(e.name.clone());
-                        }
+                        && let Some(e) = self.entries.get(self.selected)
+                    {
+                        result = TemplatePickerResult::MakeDefault(e.name.clone());
+                    }
                     if i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Q) {
                         result = TemplatePickerResult::Cancel;
                         still_open = false;

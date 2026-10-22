@@ -327,7 +327,9 @@ pub fn is_text_frame(frame: &[u8]) -> bool {
 pub fn decode_frame(frame: &[u8], chip: ChipFamily) -> Result<DecodedFrame, FrameError> {
     if is_text_frame(frame) {
         let text = String::from_utf8_lossy(frame);
-        return Ok(DecodedFrame::Text(text.trim_matches(['\r', '\n']).to_string()));
+        return Ok(DecodedFrame::Text(
+            text.trim_matches(['\r', '\n']).to_string(),
+        ));
     }
     let mut owned = frame.to_vec();
     match wire::decode_cobs(&mut owned) {

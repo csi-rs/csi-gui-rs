@@ -165,7 +165,11 @@ impl CsiData {
         if decoded.is_empty() {
             return None;
         }
-        let len = decoded.iter().map(|p| p.csi_raw_data.len()).min().unwrap_or(0);
+        let len = decoded
+            .iter()
+            .map(|p| p.csi_raw_data.len())
+            .min()
+            .unwrap_or(0);
         let mut sum = vec![0i64; len];
         for p in &decoded {
             for (i, v) in p.csi_raw_data.iter().take(len).enumerate() {

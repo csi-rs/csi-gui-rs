@@ -219,7 +219,11 @@ impl DeviceInfo {
     pub fn summary(&self) -> String {
         format!(
             "{} {} · {} · proto {}",
-            if self.name.is_empty() { "firmware" } else { &self.name },
+            if self.name.is_empty() {
+                "firmware"
+            } else {
+                &self.name
+            },
             self.version,
             self.chip.label(),
             self.protocol
@@ -260,7 +264,12 @@ mod tests {
         info.protocol = 2;
         assert_eq!(info.check(), Err(Incompatibility::Protocol(2)));
         info.protocol = 5;
-        assert!(info.check().unwrap_err().to_string().contains("update csi-gui-rs"));
+        assert!(
+            info.check()
+                .unwrap_err()
+                .to_string()
+                .contains("update csi-gui-rs")
+        );
         info.protocol = 4;
         info.log = "defmt".into();
         assert_eq!(info.check(), Err(Incompatibility::Defmt));

@@ -1,5 +1,5 @@
 use super::colormap::{swatch_widget, viridis};
-use super::{subcarrier_x, subcarrier_x_bounds, title_bar, ViewCtx};
+use super::{ViewCtx, subcarrier_x, subcarrier_x_bounds, title_bar};
 use egui::Color32;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Polygon, VLine};
 
@@ -113,7 +113,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         .collect();
 
     if traces.is_empty() {
-        ui.centered_and_justified(|ui| ui.label("Subcarrier counts varied — try a smaller window."));
+        ui.centered_and_justified(|ui| {
+            ui.label("Subcarrier counts varied — try a smaller window.")
+        });
         return;
     }
 
@@ -159,16 +161,12 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                 MagnitudeDisplay::MeanEnvelope => {
                     let (mean, std) = mean_and_std(&traces, subcarriers);
                     let mut poly_pts: Vec<[f64; 2]> = (0..subcarriers)
-                        .map(|k| {
-                            [subcarrier_x(k, subcarriers), (mean[k] + std[k]) as f64]
-                        })
+                        .map(|k| [subcarrier_x(k, subcarriers), (mean[k] + std[k]) as f64])
                         .collect();
                     poly_pts.extend(
                         (0..subcarriers)
                             .rev()
-                            .map(|k| {
-                                [subcarrier_x(k, subcarriers), (mean[k] - std[k]) as f64]
-                            }),
+                            .map(|k| [subcarrier_x(k, subcarriers), (mean[k] - std[k]) as f64]),
                     );
                     plot_ui.polygon(
                         Polygon::new("±1σ", PlotPoints::from(poly_pts))
@@ -245,14 +243,13 @@ fn render_heatmap(
                     let color = viridis(n);
                     let x = s as f64 + x_offset;
                     let y = t as f64;
-                    let cell: PlotPoints = vec![
-                        [x, y],
-                        [x + 1.0, y],
-                        [x + 1.0, y + 1.0],
-                        [x, y + 1.0],
-                    ]
-                    .into();
-                    plot_ui.polygon(Polygon::new("", cell).fill_color(color).stroke((0.0, color)));
+                    let cell: PlotPoints =
+                        vec![[x, y], [x + 1.0, y], [x + 1.0, y + 1.0], [x, y + 1.0]].into();
+                    plot_ui.polygon(
+                        Polygon::new("", cell)
+                            .fill_color(color)
+                            .stroke((0.0, color)),
+                    );
                 }
             }
         });

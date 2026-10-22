@@ -57,7 +57,9 @@ impl App {
         match self.text_prompt.show(ctx) {
             TextPromptResult::Submit(name, TextPromptPurpose::SaveTemplate) => {
                 match persistence::save_template(name.trim(), &self.workspace()) {
-                    Ok(path) => self.toasts.info(format!("template saved: {}", path.display())),
+                    Ok(path) => self
+                        .toasts
+                        .info(format!("template saved: {}", path.display())),
                     Err(e) => self.toasts.error(format!("saving template: {e}")),
                 }
             }
@@ -84,7 +86,10 @@ impl App {
                     Err(e) => self.toasts.error(format!("RRD export failed: {e}")),
                 }
             }
-            TextPromptResult::Submit(_, TextPromptPurpose::None | TextPromptPurpose::ExportData)
+            TextPromptResult::Submit(
+                _,
+                TextPromptPurpose::None | TextPromptPurpose::ExportData,
+            )
             | TextPromptResult::Cancel
             | TextPromptResult::None => {}
         }
@@ -149,11 +154,13 @@ impl App {
             }
             TextPromptPurpose::RerunFile => {
                 self.text_prompt.title = "Record to RRD".into();
-                self.text_prompt.label = format!("File name (in {}):", crate::paths::rerun_dir().display());
+                self.text_prompt.label =
+                    format!("File name (in {}):", crate::paths::rerun_dir().display());
             }
             _ => {
                 self.text_prompt.title = "Export history to RRD".into();
-                self.text_prompt.label = format!("File name (in {}):", crate::paths::rerun_dir().display());
+                self.text_prompt.label =
+                    format!("File name (in {}):", crate::paths::rerun_dir().display());
             }
         }
     }
@@ -172,20 +179,33 @@ impl App {
         let mut written = 0;
         let mut notices = Vec::new();
         for s in &self.devices.sessions {
-            let (packets, source): (Vec<CsiData>, &str) = if let Some(rec) = s.recorder.last_recording() {
-                match persistence::import_packets(&rec.path) {
-                    Ok(p) => (p, "full recording"),
-                    Err(e) => {
-                        notices.push(Notice::Error(format!("{}: reading {}: {e}", s.label(), rec.path.display())));
-                        continue;
+            let (packets, source): (Vec<CsiData>, &str) =
+                if let Some(rec) = s.recorder.last_recording() {
+                    match persistence::import_packets(&rec.path) {
+                        Ok(p) => (p, "full recording"),
+                        Err(e) => {
+                            notices.push(Notice::Error(format!(
+                                "{}: reading {}: {e}",
+                                s.label(),
+                                rec.path.display()
+                            )));
+                            continue;
+                        }
                     }
-                }
-            } else if !s.history.raw_history.is_empty() {
-                (s.history.raw_history.iter().cloned().collect(), "imported capture")
-            } else {
-                let p: Vec<CsiData> = s.history.entries.iter().filter_map(|e| e.csi.clone()).collect();
-                (p, "history, averaged per tick")
-            };
+                } else if !s.history.raw_history.is_empty() {
+                    (
+                        s.history.raw_history.iter().cloned().collect(),
+                        "imported capture",
+                    )
+                } else {
+                    let p: Vec<CsiData> = s
+                        .history
+                        .entries
+                        .iter()
+                        .filter_map(|e| e.csi.clone())
+                        .collect();
+                    (p, "history, averaged per tick")
+                };
             if packets.is_empty() {
                 continue;
             }
@@ -216,7 +236,10 @@ impl App {
         let Some(path) = rfd::FileDialog::new()
             .set_title("Import CSI capture")
             .set_directory(crate::paths::exports_dir())
-            .add_filter("CSI captures", &["csv", "jsonl", "json", "ndjson", "parquet", "pq"])
+            .add_filter(
+                "CSI captures",
+                &["csv", "jsonl", "json", "ndjson", "parquet", "pq"],
+            )
             .add_filter("All files", &["*"])
             .pick_file()
         else {
@@ -252,7 +275,9 @@ impl App {
                     "imported {n} packets as \"{name}\". Add a Replay pane to scrub; R returns to live."
                 ));
             }
-            Err(e) => self.alert.open_error("Import failed", format!("{}\n\n{e}", path.display())),
+            Err(e) => self
+                .alert
+                .open_error("Import failed", format!("{}\n\n{e}", path.display())),
         }
     }
 }

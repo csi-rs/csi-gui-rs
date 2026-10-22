@@ -14,6 +14,6 @@ pub mod main_menu;
 pub mod preprocess_overlay;
 pub mod template_picker;
 pub mod text_input;
-pub mod toast;
 pub mod theme_picker;
+pub mod toast;
 pub mod view_selector;

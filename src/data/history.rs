@@ -1,5 +1,5 @@
 use super::csi::CsiData;
-use super::stats::{NetworkStats, GRID_SIZE};
+use super::stats::{GRID_SIZE, NetworkStats};
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -117,7 +117,11 @@ impl History {
         self.frames_decoded_total = self.entries.len() as u64;
     }
 
-    pub fn push_tick(&mut self, batch: Vec<CsiData>, raw_frames_delta: u64) -> Option<&NetworkStats> {
+    pub fn push_tick(
+        &mut self,
+        batch: Vec<CsiData>,
+        raw_frames_delta: u64,
+    ) -> Option<&NetworkStats> {
         let id = self.next_id;
         self.push_tick_at(id, batch, raw_frames_delta)
     }

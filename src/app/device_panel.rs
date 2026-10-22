@@ -25,7 +25,11 @@ impl App {
         self.device_list(ui);
         ui.separator();
 
-        let Some(ai) = self.devices.active.filter(|&i| i < self.devices.sessions.len()) else {
+        let Some(ai) = self
+            .devices
+            .active
+            .filter(|&i| i < self.devices.sessions.len())
+        else {
             ui.add_space(8.0);
             ui.label("No device selected.");
             ui.label(
@@ -61,7 +65,8 @@ impl App {
                 .into_iter()
                 .map(|p| (p.name.clone(), p.describe(), p.is_likely_esp()))
                 .collect();
-            if free.iter().any(|(_, _, esp)| *esp) && ui.button("Attach all ESP32 ports").clicked() {
+            if free.iter().any(|(_, _, esp)| *esp) && ui.button("Attach all ESP32 ports").clicked()
+            {
                 ui.close();
                 self.devices.attach_all();
             }
@@ -81,7 +86,11 @@ impl App {
                 }
             }
             ui.separator();
-            if ui.button("Simulated device").on_hover_text("A virtual esp-csi-cli-rs board, for trying things out").clicked() {
+            if ui
+                .button("Simulated device")
+                .on_hover_text("A virtual esp-csi-cli-rs board, for trying things out")
+                .clicked()
+            {
                 ui.close();
                 self.add_simulated();
             }
@@ -94,14 +103,25 @@ impl App {
     /// The list, one row per device, with the bulk actions above it.
     fn device_list(&mut self, ui: &mut egui::Ui) {
         let targets = self.devices.targets();
-        let n_ready = targets.iter().filter(|&&i| self.devices.sessions[i].is_ready()).count();
-        let running = targets.iter().any(|&i| self.devices.sessions[i].is_collecting());
-        let ticked = self.devices.sessions.iter().filter(|s| s.selected && s.live).count();
-        let scope = if ticked == 0 || ticked == self.devices.sessions.iter().filter(|s| s.live).count() {
-            "all".to_string()
-        } else {
-            format!("{ticked} ticked")
-        };
+        let n_ready = targets
+            .iter()
+            .filter(|&&i| self.devices.sessions[i].is_ready())
+            .count();
+        let running = targets
+            .iter()
+            .any(|&i| self.devices.sessions[i].is_collecting());
+        let ticked = self
+            .devices
+            .sessions
+            .iter()
+            .filter(|s| s.selected && s.live)
+            .count();
+        let scope =
+            if ticked == 0 || ticked == self.devices.sessions.iter().filter(|s| s.live).count() {
+                "all".to_string()
+            } else {
+                format!("{ticked} ticked")
+            };
 
         ui.horizontal_wrapped(|ui| {
             if running {
@@ -111,7 +131,9 @@ impl App {
                 }
             } else if ui
                 .add_enabled(n_ready > 0, egui::Button::new(format!("▶ Start {scope}")))
-                .on_hover_text("One shared session id and wall-clock epoch, so the devices' frames line up")
+                .on_hover_text(
+                    "One shared session id and wall-clock epoch, so the devices' frames line up",
+                )
                 .on_disabled_hover_text("No ticked device is ready")
                 .clicked()
             {
@@ -120,7 +142,10 @@ impl App {
                 self.go_live();
             }
             if ui
-                .add_enabled(!running && !targets.is_empty(), egui::Button::new(format!("Apply {scope}")))
+                .add_enabled(
+                    !running && !targets.is_empty(),
+                    egui::Button::new(format!("Apply {scope}")),
+                )
                 .on_hover_text("Push each device's own config")
                 .clicked()
             {
@@ -164,12 +189,22 @@ impl App {
                                 .info
                                 .as_ref()
                                 .map(|i| format!("{} · v{}", i.chip.label(), i.version))
-                                .unwrap_or_else(|| if s.live { s.port.clone() } else { "imported capture".into() });
+                                .unwrap_or_else(|| {
+                                    if s.live {
+                                        s.port.clone()
+                                    } else {
+                                        "imported capture".into()
+                                    }
+                                });
                             ui.label(egui::RichText::new(chip).weak().small());
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if s.is_ready() {
-                                let (sym, tip) = if s.is_collecting() { ("■", "Stop") } else { ("▶", "Start") };
+                                let (sym, tip) = if s.is_collecting() {
+                                    ("■", "Stop")
+                                } else {
+                                    ("▶", "Start")
+                                };
                                 let enabled = s.is_collecting() || s.config_applied();
                                 if ui
                                     .add_enabled(enabled, egui::Button::new(sym).small())
@@ -230,7 +265,10 @@ impl App {
                     .into(),
             ),
             ConnState::Incompatible(why) => ("Incompatible firmware", why.clone()),
-            ConnState::Error(e) => ("Can't open the port", format!("{e}\n\nOn Linux, check you're in the dialout group.")),
+            ConnState::Error(e) => (
+                "Can't open the port",
+                format!("{e}\n\nOn Linux, check you're in the dialout group."),
+            ),
             _ => return,
         };
         let mut retry = false;
@@ -265,83 +303,104 @@ impl App {
             .default_open(true)
             .show(ui, |ui| {
                 let s = &mut self.devices.sessions[ai];
-                egui::Grid::new("device-facts").num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
-                    ui.label("Name");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut s.alias)
-                            .hint_text(s.port.rsplit('/').next().unwrap_or(&s.port))
-                            .char_limit(32)
-                            .desired_width(160.0),
-                    )
-                    .on_hover_text("A name for this board; remembered by its MAC");
-                    ui.end_row();
-                    ui.label("Colour");
-                    ui.color_edit_button_srgba(&mut s.color);
-                    ui.end_row();
-                    if s.live {
-                        ui.label("Port");
-                        ui.label(&s.port);
-                        ui.end_row();
-                        let (col, state) = state_badge(&s.conn_state, s.is_collecting());
-                        ui.label("State");
-                        ui.colored_label(col, state);
-                        ui.end_row();
-                    }
-                    if let Some(info) = &s.info {
-                        ui.label("Firmware");
-                        ui.label(format!("{} {}", info.name, info.version));
-                        ui.end_row();
-                        ui.label("Chip");
-                        ui.label(format!("{} · protocol {}", info.chip.label(), info.protocol));
-                        ui.end_row();
-                        if let Some(mac) = &info.mac {
-                            ui.label("MAC");
-                            ui.label(egui::RichText::new(mac).monospace());
-                            ui.end_row();
-                        }
-                        if !info.transport.is_empty() {
-                            ui.label("Transport");
-                            ui.label(&info.transport);
-                            ui.end_row();
-                        }
-                    }
-                    let sid = s.shared.session_id.load(Ordering::Relaxed);
-                    if sid != 0 {
-                        ui.label("Session");
-                        ui.label(egui::RichText::new(format!("{sid:08x}")).monospace());
-                        ui.end_row();
-                    }
-                    if s.live && s.shared.frames_total.load(Ordering::Relaxed) > 0 {
-                        ui.label("Frames");
-                        ui.label(format!(
-                            "{} · {:.0}% decoded · {} lost · {} dropped",
-                            s.shared.frames_total.load(Ordering::Relaxed),
-                            s.shared.decode_rate() * 100.0,
-                            s.shared.frames_lost.load(Ordering::Relaxed),
-                            s.shared.frames_dropped.load(Ordering::Relaxed)
-                        ));
-                        ui.end_row();
-                    }
-                    if let Some(rec) = s.recorder.last_recording() {
-                        ui.label("Last file");
-                        ui.label(
-                            egui::RichText::new(rec.path.file_name().and_then(|n| n.to_str()).unwrap_or("?"))
-                                .small(),
+                egui::Grid::new("device-facts")
+                    .num_columns(2)
+                    .spacing([10.0, 3.0])
+                    .show(ui, |ui| {
+                        ui.label("Name");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut s.alias)
+                                .hint_text(s.port.rsplit('/').next().unwrap_or(&s.port))
+                                .char_limit(32)
+                                .desired_width(160.0),
                         )
-                        .on_hover_text(rec.path.display().to_string());
+                        .on_hover_text("A name for this board; remembered by its MAC");
                         ui.end_row();
-                    }
-                });
+                        ui.label("Colour");
+                        ui.color_edit_button_srgba(&mut s.color);
+                        ui.end_row();
+                        if s.live {
+                            ui.label("Port");
+                            ui.label(&s.port);
+                            ui.end_row();
+                            let (col, state) = state_badge(&s.conn_state, s.is_collecting());
+                            ui.label("State");
+                            ui.colored_label(col, state);
+                            ui.end_row();
+                        }
+                        if let Some(info) = &s.info {
+                            ui.label("Firmware");
+                            ui.label(format!("{} {}", info.name, info.version));
+                            ui.end_row();
+                            ui.label("Chip");
+                            ui.label(format!(
+                                "{} · protocol {}",
+                                info.chip.label(),
+                                info.protocol
+                            ));
+                            ui.end_row();
+                            if let Some(mac) = &info.mac {
+                                ui.label("MAC");
+                                ui.label(egui::RichText::new(mac).monospace());
+                                ui.end_row();
+                            }
+                            if !info.transport.is_empty() {
+                                ui.label("Transport");
+                                ui.label(&info.transport);
+                                ui.end_row();
+                            }
+                        }
+                        let sid = s.shared.session_id.load(Ordering::Relaxed);
+                        if sid != 0 {
+                            ui.label("Session");
+                            ui.label(egui::RichText::new(format!("{sid:08x}")).monospace());
+                            ui.end_row();
+                        }
+                        if s.live && s.shared.frames_total.load(Ordering::Relaxed) > 0 {
+                            ui.label("Frames");
+                            ui.label(format!(
+                                "{} · {:.0}% decoded · {} lost · {} dropped",
+                                s.shared.frames_total.load(Ordering::Relaxed),
+                                s.shared.decode_rate() * 100.0,
+                                s.shared.frames_lost.load(Ordering::Relaxed),
+                                s.shared.frames_dropped.load(Ordering::Relaxed)
+                            ));
+                            ui.end_row();
+                        }
+                        if let Some(rec) = s.recorder.last_recording() {
+                            ui.label("Last file");
+                            ui.label(
+                                egui::RichText::new(
+                                    rec.path.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                )
+                                .small(),
+                            )
+                            .on_hover_text(rec.path.display().to_string());
+                            ui.end_row();
+                        }
+                    });
                 ui.horizontal(|ui| {
                     if s.live {
-                        if ui.button("Reset").on_hover_text("Reset the board and re-identify").clicked() {
+                        if ui
+                            .button("Reset")
+                            .on_hover_text("Reset the board and re-identify")
+                            .clicked()
+                        {
                             s.send(EspCommand::Reset);
                         }
-                        if ui.button("Restart").on_hover_text("Soft reboot via the `restart` command").clicked() {
+                        if ui
+                            .button("Restart")
+                            .on_hover_text("Soft reboot via the `restart` command")
+                            .clicked()
+                        {
                             s.send(EspCommand::Restart);
                         }
                     }
-                    if ui.button("Remove").on_hover_text("Disconnect and forget this session").clicked() {
+                    if ui
+                        .button("Remove")
+                        .on_hover_text("Disconnect and forget this session")
+                        .clicked()
+                    {
                         remove = true;
                     }
                 });
@@ -369,7 +428,10 @@ impl App {
                 let s = &mut self.devices.sessions[ai];
                 let collecting = s.is_collecting();
                 if collecting {
-                    ui.colored_label(WARN, "Collecting: the firmware ignores changes until you stop.");
+                    ui.colored_label(
+                        WARN,
+                        "Collecting: the firmware ignores changes until you stop.",
+                    );
                 }
                 let chip = s.chip();
                 let changed = ui
@@ -392,12 +454,18 @@ impl App {
                     let apply = egui::Button::new(egui::RichText::new("Apply").strong());
                     if ui
                         .add_enabled(can_apply, apply)
-                        .on_disabled_hover_text("Fix the config, stop collecting, and wait for the device")
+                        .on_disabled_hover_text(
+                            "Fix the config, stop collecting, and wait for the device",
+                        )
                         .clicked()
-                        && let Err(e) = s.apply_config() {
-                            notices.push(Notice::Error(e));
-                        }
-                    if ui.add_enabled(!collecting, egui::Button::new("Defaults")).clicked() {
+                        && let Err(e) = s.apply_config()
+                    {
+                        notices.push(Notice::Error(e));
+                    }
+                    if ui
+                        .add_enabled(!collecting, egui::Button::new("Defaults"))
+                        .clicked()
+                    {
                         s.cfg = crate::protocol::config::EspConfig::default();
                         s.shared.mark_config_dirty();
                     }
@@ -422,7 +490,10 @@ impl App {
             });
         if let Some(to) = copy_to {
             notices.extend(self.devices.copy_config(ai, &to));
-            notices.push(Notice::Info(format!("config copied to {} device(s)", to.len())));
+            notices.push(Notice::Info(format!(
+                "config copied to {} device(s)",
+                to.len()
+            )));
         }
         if !notices.is_empty() {
             self.devices.remember(ai);
@@ -456,7 +527,10 @@ impl App {
                     .weak()
                     .small(),
                 );
-                let sel = self.esp_panel.pair_with.filter(|i| others.iter().any(|(j, _)| j == i));
+                let sel = self
+                    .esp_panel
+                    .pair_with
+                    .filter(|i| others.iter().any(|(j, _)| j == i));
                 let sel_label = sel
                     .and_then(|i| others.iter().find(|(j, _)| *j == i))
                     .map(|(_, l)| l.clone())
@@ -469,7 +543,10 @@ impl App {
                                 ui.selectable_value(&mut self.esp_panel.pair_with, Some(*i), l);
                             }
                         });
-                    if ui.add_enabled(sel.is_some(), egui::Button::new("Pair")).clicked() {
+                    if ui
+                        .add_enabled(sel.is_some(), egui::Button::new("Pair"))
+                        .clicked()
+                    {
                         pair = sel;
                     }
                 });
@@ -508,8 +585,12 @@ impl App {
                                 .desired_width(ui.available_width() - 60.0),
                         );
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if (ui.button("Send").clicked() || enter) && !self.esp_panel.raw_command.trim().is_empty() {
-                            s.send(EspCommand::Raw(self.esp_panel.raw_command.trim().to_string()));
+                        if (ui.button("Send").clicked() || enter)
+                            && !self.esp_panel.raw_command.trim().is_empty()
+                        {
+                            s.send(EspCommand::Raw(
+                                self.esp_panel.raw_command.trim().to_string(),
+                            ));
                             self.esp_panel.raw_command.clear();
                         }
                     });

@@ -67,8 +67,7 @@ use std::collections::VecDeque;
 const ROLLING_HEATMAP_ROWS: usize = 500;
 
 /// Where the sink should send its data. `Off` is the default.
-#[derive(Clone, Debug)]
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub enum Transport {
     /// Sink is disabled — `log_packet` / `log_tick` are no-ops.
     #[default]
@@ -89,7 +88,6 @@ pub enum Transport {
         path: PathBuf,
     },
 }
-
 
 impl Transport {
     /// Short human label for the status bar / menu (e.g. `"spawn"`,
@@ -364,7 +362,10 @@ impl RerunSink {
             }
 
             // 5. scalars — per-packet RSSI/noise floor.
-            let _ = rec.log(format!("{root}/scalars/rssi"), &rerun::Scalars::new([p.rssi as f64]));
+            let _ = rec.log(
+                format!("{root}/scalars/rssi"),
+                &rerun::Scalars::new([p.rssi as f64]),
+            );
             let _ = rec.log(
                 format!("{root}/scalars/noise_floor"),
                 &rerun::Scalars::new([p.noise_floor as f64]),
@@ -390,8 +391,14 @@ impl RerunSink {
             let Some(rec) = self.rec.as_ref() else { return };
             let root = entity_root(device);
             rec.set_time_sequence("tick_idx", stats.id as i64);
-            let _ = rec.log(format!("{root}/scalars/pps"), &rerun::Scalars::new([stats.pps as f64]));
-            let _ = rec.log(format!("{root}/scalars/snr"), &rerun::Scalars::new([stats.snr as f64]));
+            let _ = rec.log(
+                format!("{root}/scalars/pps"),
+                &rerun::Scalars::new([stats.pps as f64]),
+            );
+            let _ = rec.log(
+                format!("{root}/scalars/snr"),
+                &rerun::Scalars::new([stats.snr as f64]),
+            );
             let _ = rec.log(
                 format!("{root}/scalars/tick_rssi"),
                 &rerun::Scalars::new([stats.rssi as f64]),
@@ -422,25 +429,17 @@ impl RerunSink {
             return (egui::Color32::from_rgb(220, 80, 80), "rerun: err".into());
         }
         match (&self.transport, self.live_streaming, self.rrd_recording) {
-            (Transport::Off, _, _) => (
-                egui::Color32::from_gray(160),
-                "rerun: off".into(),
-            ),
-            (Transport::File { .. }, true, true) => (
-                egui::Color32::from_rgb(80, 220, 110),
-                "rerun: rec".into(),
-            ),
-            (_, true, _) => (
-                egui::Color32::from_rgb(80, 220, 110),
-                "rerun: live".into(),
-            ),
+            (Transport::Off, _, _) => (egui::Color32::from_gray(160), "rerun: off".into()),
+            (Transport::File { .. }, true, true) => {
+                (egui::Color32::from_rgb(80, 220, 110), "rerun: rec".into())
+            }
+            (_, true, _) => (egui::Color32::from_rgb(80, 220, 110), "rerun: live".into()),
             _ => (
                 egui::Color32::from_gray(180),
                 format!("rerun: {} (paused)", self.transport.label()),
             ),
         }
     }
-
 }
 
 #[cfg(feature = "rerun")]
@@ -522,9 +521,10 @@ fn build_connect(host: &str, port: u16) -> Result<rerun::RecordingStream, String
 #[cfg(feature = "rerun")]
 fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     rerun::RecordingStreamBuilder::new("csi-gui-rs")
         .save(path)
         .map_err(|e| e.to_string())
@@ -555,53 +555,65 @@ pub fn export_history_to_rrd(histories: &[(&str, &History)], path: &Path) -> Res
     #[cfg(feature = "rerun")]
     {
         if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
         let rec = rerun::RecordingStreamBuilder::new("csi-gui-rs-export")
             .save(path)
             .map_err(|e| e.to_string())?;
 
         for (device, history) in histories {
-        let root = entity_root(device);
-        let mut frame_idx: u64 = 0;
-        for stats in history.entries.iter() {
-            let Some(csi) = stats.csi.as_ref() else { continue };
-            let n = csi.subcarriers();
-            if n == 0 {
-                continue;
+            let root = entity_root(device);
+            let mut frame_idx: u64 = 0;
+            for stats in history.entries.iter() {
+                let Some(csi) = stats.csi.as_ref() else {
+                    continue;
+                };
+                let n = csi.subcarriers();
+                if n == 0 {
+                    continue;
+                }
+                rec.set_time_sequence("frame_idx", frame_idx as i64);
+                rec.set_time_sequence("tick_idx", stats.id as i64);
+
+                let amps: Vec<f64> = (0..n).map(|k| csi.amplitude(k) as f64).collect();
+                let _ = rec.log(format!("{root}/bar_amplitude"), &rerun::BarChart::new(amps));
+
+                let positions: Vec<[f32; 3]> = (0..n)
+                    .map(|k| {
+                        let (i, q) = csi.iq(k);
+                        [i as f32, q as f32, csi.amplitude(k)]
+                    })
+                    .collect();
+                let colors: Vec<[u8; 4]> =
+                    (0..n).map(|k| dsp::phase_to_rgba(csi.phase(k))).collect();
+                let _ = rec.log(
+                    format!("{root}/complex_scatter"),
+                    &rerun::Points3D::new(positions).with_colors(colors),
+                );
+
+                let cir = dsp::compute_cir(csi);
+                if !cir.is_empty() {
+                    let cir_f64: Vec<f64> = cir.iter().map(|&v| v as f64).collect();
+                    let _ = rec.log(format!("{root}/cir"), &rerun::BarChart::new(cir_f64));
+                }
+
+                let _ = rec.log(
+                    format!("{root}/scalars/rssi"),
+                    &rerun::Scalars::new([stats.rssi as f64]),
+                );
+                let _ = rec.log(
+                    format!("{root}/scalars/snr"),
+                    &rerun::Scalars::new([stats.snr as f64]),
+                );
+                let _ = rec.log(
+                    format!("{root}/scalars/pps"),
+                    &rerun::Scalars::new([stats.pps as f64]),
+                );
+
+                frame_idx += 1;
             }
-            rec.set_time_sequence("frame_idx", frame_idx as i64);
-            rec.set_time_sequence("tick_idx", stats.id as i64);
-
-            let amps: Vec<f64> = (0..n).map(|k| csi.amplitude(k) as f64).collect();
-            let _ = rec.log(format!("{root}/bar_amplitude"), &rerun::BarChart::new(amps));
-
-            let positions: Vec<[f32; 3]> = (0..n)
-                .map(|k| {
-                    let (i, q) = csi.iq(k);
-                    [i as f32, q as f32, csi.amplitude(k)]
-                })
-                .collect();
-            let colors: Vec<[u8; 4]> =
-                (0..n).map(|k| dsp::phase_to_rgba(csi.phase(k))).collect();
-            let _ = rec.log(
-                format!("{root}/complex_scatter"),
-                &rerun::Points3D::new(positions).with_colors(colors),
-            );
-
-            let cir = dsp::compute_cir(csi);
-            if !cir.is_empty() {
-                let cir_f64: Vec<f64> = cir.iter().map(|&v| v as f64).collect();
-                let _ = rec.log(format!("{root}/cir"), &rerun::BarChart::new(cir_f64));
-            }
-
-            let _ = rec.log(format!("{root}/scalars/rssi"), &rerun::Scalars::new([stats.rssi as f64]));
-            let _ = rec.log(format!("{root}/scalars/snr"), &rerun::Scalars::new([stats.snr as f64]));
-            let _ = rec.log(format!("{root}/scalars/pps"), &rerun::Scalars::new([stats.pps as f64]));
-
-            frame_idx += 1;
-        }
         }
         let _ = rec.flush_blocking();
         Ok(())

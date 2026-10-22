@@ -22,7 +22,8 @@ impl App {
                     ui.close();
                     let dir = crate::paths::exports_dir();
                     let _ = std::fs::create_dir_all(&dir);
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
+                    ui.ctx()
+                        .open_url(egui::OpenUrl::new_tab(format!("file://{}", dir.display())));
                 }
                 ui.separator();
                 if ui.button("Save template…").clicked() {
@@ -55,7 +56,10 @@ impl App {
                 if ui.button("Attach all ESP32 ports").clicked() {
                     ui.close();
                     let n = self.devices.attach_all();
-                    self.toasts.info(format!("attached {n} port{}", if n == 1 { "" } else { "s" }));
+                    self.toasts.info(format!(
+                        "attached {n} port{}",
+                        if n == 1 { "" } else { "s" }
+                    ));
                 }
                 ui.menu_button("Add port", |ui| {
                     if free.is_empty() {
@@ -80,7 +84,14 @@ impl App {
                 ui.checkbox(&mut self.devices.auto_attach, "Auto-attach new boards");
                 ui.separator();
                 let running = self.devices.any_collecting();
-                if ui.button(if running { "■ Stop all   S" } else { "▶ Start all   S" }).clicked() {
+                if ui
+                    .button(if running {
+                        "■ Stop all   S"
+                    } else {
+                        "▶ Start all   S"
+                    })
+                    .clicked()
+                {
                     ui.close();
                     self.toggle_run_all();
                 }
@@ -90,7 +101,10 @@ impl App {
                     let n = self.devices.apply_all(&targets);
                     self.notify(n);
                 }
-                ui.checkbox(&mut self.devices.record_on_capture, "Record while collecting");
+                ui.checkbox(
+                    &mut self.devices.record_on_capture,
+                    "Record while collecting",
+                );
             });
 
             ui.menu_button("View", |ui| {
@@ -109,7 +123,10 @@ impl App {
                 });
                 ui.menu_button("Theme", |ui| {
                     for v in ThemeVariant::ALL {
-                        if ui.selectable_label(self.theme_variant == v, v.label()).clicked() {
+                        if ui
+                            .selectable_label(self.theme_variant == v, v.label())
+                            .clicked()
+                        {
                             ui.close();
                             let ctx = ui.ctx().clone();
                             self.set_theme(&ctx, v);
@@ -150,12 +167,18 @@ impl App {
                         .small(),
                 );
                 ui.separator();
-                if ui.selectable_label(matches!(self.rerun.transport(), Transport::Off), "Off").clicked() {
+                if ui
+                    .selectable_label(matches!(self.rerun.transport(), Transport::Off), "Off")
+                    .clicked()
+                {
                     self.rerun.set_transport(Transport::Off);
                     ui.close();
                 }
                 if ui
-                    .selectable_label(matches!(self.rerun.transport(), Transport::Spawn), "Spawn viewer")
+                    .selectable_label(
+                        matches!(self.rerun.transport(), Transport::Spawn),
+                        "Spawn viewer",
+                    )
                     .clicked()
                 {
                     self.rerun.set_transport(Transport::Spawn);
@@ -232,8 +255,12 @@ impl App {
                 if ui
                     .add_enabled(
                         enabled,
-                        egui::Button::new(egui::RichText::new(label).color(egui::Color32::WHITE).strong())
-                            .fill(fill),
+                        egui::Button::new(
+                            egui::RichText::new(label)
+                                .color(egui::Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(fill),
                     )
                     .on_hover_text("Start / stop every ticked device under one shared session (S)")
                     .on_disabled_hover_text("No device is ready yet")

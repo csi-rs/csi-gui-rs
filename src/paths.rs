@@ -97,10 +97,20 @@ pub fn unix_now_us() -> u64 {
 pub fn sanitize_file_stem(s: &str) -> String {
     let out: String = s
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() { "capture".to_string() } else { trimmed.to_string() }
+    if trimmed.is_empty() {
+        "capture".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[cfg(test)]

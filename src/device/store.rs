@@ -45,8 +45,11 @@ impl DeviceStore {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("json.tmp");
-        let json = serde_json::to_string_pretty(&Self { version: 1, ..self.clone() })
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(&Self {
+            version: 1,
+            ..self.clone()
+        })
+        .map_err(std::io::Error::other)?;
         std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path)
     }

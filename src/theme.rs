@@ -136,8 +136,7 @@ impl Theme {
         visuals.panel_fill = self.bg;
         visuals.window_fill = self.bg;
         visuals.override_text_color = Some(self.fg);
-        visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0_f32, self.text_normal);
+        visuals.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, self.text_normal);
         style.visuals = visuals;
         ctx.set_global_style(style);
     }

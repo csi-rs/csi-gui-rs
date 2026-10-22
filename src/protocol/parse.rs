@@ -92,10 +92,7 @@ impl TextParser {
 /// `[1, -2, 3, …]` decimal format both work — but "67" inside a hex array
 /// resolves to 0x67=103, not 67.
 fn parse_int_array(line: &str) -> Vec<i32> {
-    let inner = line
-        .trim()
-        .trim_start_matches('[')
-        .trim_end_matches(']');
+    let inner = line.trim().trim_start_matches('[').trim_end_matches(']');
     let tokens: Vec<&str> = inner
         .split(|c: char| c == ',' || c.is_whitespace())
         .map(|s| s.trim())
@@ -105,7 +102,10 @@ fn parse_int_array(line: &str) -> Vec<i32> {
         .iter()
         .any(|t| t.bytes().any(|b| matches!(b, b'a'..=b'f' | b'A'..=b'F')));
     let radix = if any_hex_letter { 16 } else { 10 };
-    tokens.iter().filter_map(|t| parse_int_token(t, radix)).collect()
+    tokens
+        .iter()
+        .filter_map(|t| parse_int_token(t, radix))
+        .collect()
 }
 
 fn parse_int_token(s: &str, radix: u32) -> Option<i32> {
@@ -298,11 +298,11 @@ pub fn parse_array_list(line: &str, chip: ChipFamily) -> Option<CsiData> {
     let inner_end = line[..inner_close].rfind(']').map(|p| p + 1)?;
     let inner = &line[inner_open..inner_end];
     let csi = parse_int_array(inner);
-    let mac_tail = line[inner_end..inner_close].trim_matches(|c: char| c == ',' || c.is_whitespace());
+    let mac_tail =
+        line[inner_end..inner_close].trim_matches(|c: char| c == ',' || c.is_whitespace());
 
     // Scalars: between '[' and the comma immediately before the inner array.
-    let scalars_str = line[1..inner_open]
-        .trim_end_matches(|c: char| c == ',' || c.is_whitespace());
+    let scalars_str = line[1..inner_open].trim_end_matches(|c: char| c == ',' || c.is_whitespace());
     let scalars: Vec<&str> = scalars_str
         .split(',')
         .map(|s| s.trim())

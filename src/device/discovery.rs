@@ -41,9 +41,16 @@ impl PortCandidate {
             Some(v) => matches!(v, VID_ESPRESSIF | VID_SILABS | VID_WCH | VID_FTDI),
             None => {
                 let n = self.name.to_ascii_lowercase();
-                ["ttyusb", "ttyacm", "usbserial", "usbmodem", "wchusbserial", "slab_usbtouart"]
-                    .iter()
-                    .any(|p| n.contains(p))
+                [
+                    "ttyusb",
+                    "ttyacm",
+                    "usbserial",
+                    "usbmodem",
+                    "wchusbserial",
+                    "slab_usbtouart",
+                ]
+                .iter()
+                .any(|p| n.contains(p))
             }
         }
     }
@@ -110,7 +117,10 @@ pub fn scan() -> Vec<PortCandidate> {
 /// `None` unless there are exactly 12 hex digits.
 pub fn normalize_mac(s: &str) -> Option<String> {
     let hex: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex.len() != 12 || s.chars().any(|c| !(c.is_ascii_hexdigit() || matches!(c, ':' | '-'))) {
+    if hex.len() != 12
+        || s.chars()
+            .any(|c| !(c.is_ascii_hexdigit() || matches!(c, ':' | '-')))
+    {
         return None;
     }
     let hex = hex.to_ascii_uppercase();
@@ -156,7 +166,11 @@ mod tests {
 
     #[test]
     fn native_usb_serial_is_the_mac() {
-        let p = port("/dev/ttyACM0", Some(VID_ESPRESSIF), Some("a0:85:e3:f5:48:90"));
+        let p = port(
+            "/dev/ttyACM0",
+            Some(VID_ESPRESSIF),
+            Some("a0:85:e3:f5:48:90"),
+        );
         assert_eq!(p.mac_hint().as_deref(), Some("A0:85:E3:F5:48:90"));
         let bridge = port("/dev/ttyUSB0", Some(VID_SILABS), Some("0001"));
         assert_eq!(bridge.mac_hint(), None);
@@ -164,8 +178,14 @@ mod tests {
 
     #[test]
     fn normalizes_mac_spellings() {
-        assert_eq!(normalize_mac("a085e3f54890").as_deref(), Some("A0:85:E3:F5:48:90"));
-        assert_eq!(normalize_mac("A0-85-E3-F5-48-90").as_deref(), Some("A0:85:E3:F5:48:90"));
+        assert_eq!(
+            normalize_mac("a085e3f54890").as_deref(),
+            Some("A0:85:E3:F5:48:90")
+        );
+        assert_eq!(
+            normalize_mac("A0-85-E3-F5-48-90").as_deref(),
+            Some("A0:85:E3:F5:48:90")
+        );
         assert_eq!(normalize_mac("0001"), None);
         assert_eq!(normalize_mac("zz:85:e3:f5:48:90"), None);
     }
@@ -176,7 +196,10 @@ mod tests {
             port("/dev/ttyACM1", Some(VID_ESPRESSIF), Some("AA")),
             port("/dev/ttyACM3", Some(VID_ESPRESSIF), Some("BB")),
         ];
-        assert_eq!(find_moved(&ports, "BB", "/dev/ttyACM0"), Some("/dev/ttyACM3"));
+        assert_eq!(
+            find_moved(&ports, "BB", "/dev/ttyACM0"),
+            Some("/dev/ttyACM3")
+        );
         assert_eq!(find_moved(&ports, "AA", "/dev/ttyACM1"), None);
         assert_eq!(find_moved(&ports, "CC", "/dev/ttyACM0"), None);
     }

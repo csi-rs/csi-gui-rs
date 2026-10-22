@@ -34,9 +34,8 @@ impl ViewSelector {
                         self.selected = (self.selected + 1) % ViewType::ALL_SELECTABLE.len();
                     }
                     if i.key_pressed(egui::Key::ArrowUp) {
-                        self.selected =
-                            (self.selected + ViewType::ALL_SELECTABLE.len() - 1)
-                                % ViewType::ALL_SELECTABLE.len();
+                        self.selected = (self.selected + ViewType::ALL_SELECTABLE.len() - 1)
+                            % ViewType::ALL_SELECTABLE.len();
                     }
                     if i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space) {
                         chosen = Some(ViewType::ALL_SELECTABLE[self.selected]);

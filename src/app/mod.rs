@@ -302,11 +302,18 @@ impl App {
     /// `--start-all`: once every live device is ready with its config
     /// applied (or 20 s have passed and at least one is), start them.
     fn maybe_start_all(&mut self) {
-        let Some(since) = self.pending_start else { return };
+        let Some(since) = self.pending_start else {
+            return;
+        };
         let live: Vec<_> = self.devices.sessions.iter().filter(|s| s.live).collect();
-        let ready = live.iter().filter(|s| s.is_ready() && s.config_applied()).count();
+        let ready = live
+            .iter()
+            .filter(|s| s.is_ready() && s.config_applied())
+            .count();
         let settled = !live.is_empty()
-            && live.iter().all(|s| (s.is_ready() && s.config_applied()) || s.conn_state.is_problem());
+            && live
+                .iter()
+                .all(|s| (s.is_ready() && s.config_applied()) || s.conn_state.is_problem());
         if settled || (ready > 0 && since.elapsed() > Duration::from_secs(20)) {
             self.pending_start = None;
             // Give the last config line a moment to land.

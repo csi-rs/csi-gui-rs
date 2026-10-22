@@ -90,10 +90,7 @@ impl TilingManager {
             return;
         }
         let mut next_id = self.max_id();
-        if self
-            .root
-            .split_pane(self.focused, direction, &mut next_id)
-        {
+        if self.root.split_pane(self.focused, direction, &mut next_id) {
             self.focused = self.root.reindex(self.focused);
         }
     }
@@ -118,10 +115,7 @@ impl TilingManager {
         if panes.is_empty() {
             return;
         }
-        let cur = panes
-            .iter()
-            .position(|p| *p == self.focused)
-            .unwrap_or(0);
+        let cur = panes.iter().position(|p| *p == self.focused).unwrap_or(0);
         self.focused = panes[(cur + 1) % panes.len()];
     }
 
@@ -170,12 +164,8 @@ impl TilingManager {
 
         self.root = match preset {
             LayoutPreset::Single => mk(),
-            LayoutPreset::TwoColumns => {
-                split(SplitDirection::Horizontal, 50, vec![mk(), mk()])
-            }
-            LayoutPreset::TwoRows => {
-                split(SplitDirection::Vertical, 50, vec![mk(), mk()])
-            }
+            LayoutPreset::TwoColumns => split(SplitDirection::Horizontal, 50, vec![mk(), mk()]),
+            LayoutPreset::TwoRows => split(SplitDirection::Vertical, 50, vec![mk(), mk()]),
             // Left third + two equal thirds on the right (33 / 33.5 / 33.5).
             LayoutPreset::ThreeColumns => split(
                 SplitDirection::Horizontal,

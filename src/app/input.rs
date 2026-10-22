@@ -108,10 +108,14 @@ impl App {
             if shift {
                 // Split shortcuts must not auto-repeat: holding Shift+→
                 // would otherwise spam splits up to MAX_PANES.
-                if key_first_pressed(i, egui::Key::ArrowLeft) || key_first_pressed(i, egui::Key::ArrowRight) {
+                if key_first_pressed(i, egui::Key::ArrowLeft)
+                    || key_first_pressed(i, egui::Key::ArrowRight)
+                {
                     self.tiling.split(SplitDirection::Horizontal);
                 }
-                if key_first_pressed(i, egui::Key::ArrowUp) || key_first_pressed(i, egui::Key::ArrowDown) {
+                if key_first_pressed(i, egui::Key::ArrowUp)
+                    || key_first_pressed(i, egui::Key::ArrowDown)
+                {
                     self.tiling.split(SplitDirection::Vertical);
                 }
             } else if let Some((first, last)) = bounds {

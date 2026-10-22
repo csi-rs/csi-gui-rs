@@ -8,8 +8,7 @@
 use egui::Color32;
 
 /// Visual severity for the alert window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum AlertKind {
     /// Information / success — neutral chrome.
     #[default]
@@ -27,7 +26,6 @@ pub struct Alert {
     body: String,
     kind: AlertKind,
 }
-
 
 impl Alert {
     /// Pop up an informational message (e.g. "Imported 800 packets").

@@ -8,8 +8,8 @@
 
 use crate::protocol::command::{apply_csi_preset, csi_preset_names};
 use crate::protocol::config::{
-    valid_channel, CsiDelivery, EmitterIface, EspConfig, Ht40, LogMode, MinPhy, PhyRate, ReportTo,
-    Reporting, WifiMode, WifiProtocol,
+    CsiDelivery, EmitterIface, EspConfig, Ht40, LogMode, MinPhy, PhyRate, ReportTo, Reporting,
+    WifiMode, WifiProtocol, valid_channel,
 };
 use crate::protocol::info::ChipFamily;
 
@@ -252,29 +252,57 @@ impl Field {
     /// Hover text explaining the setting.
     pub fn help(self) -> &'static str {
         match self {
-            Field::Mode => "How the node reaches the channel. Session and sensing roles follow from it.",
-            Field::Channel => "Wi-Fi channel. Ignored in station mode, where the AP picks it. 5 GHz needs an ESP32-C5.",
+            Field::Mode => {
+                "How the node reaches the channel. Session and sensing roles follow from it."
+            }
+            Field::Channel => {
+                "Wi-Fi channel. Ignored in station mode, where the AP picks it. 5 GHz needs an ESP32-C5."
+            }
             Field::Protocol => "set-protocol. `ax` is ESP32-C5/C6 only.",
-            Field::He20 => "Force HE20 (802.11ax SU) on the emitters and the ESP-NOW pair. Pair the receivers with the he20 preset.",
-            Field::PeerMac => "Emitters: injection destination (blank = broadcast). ESP-NOW: explicit peer (blank = auto-pair; set it on both ends).",
-            Field::Ht40 => "wifi-ap: softAP secondary channel. ESP-NOW: force the per-peer TX PHY to HT40.",
-            Field::ApLeases => "DHCP pool size. More than one lease round-robins the flood across every station.",
-            Field::ApBurst => "Send one frame to every station back-to-back each tick: time-aligned multi-receiver capture.",
+            Field::He20 => {
+                "Force HE20 (802.11ax SU) on the emitters and the ESP-NOW pair. Pair the receivers with the he20 preset."
+            }
+            Field::PeerMac => {
+                "Emitters: injection destination (blank = broadcast). ESP-NOW: explicit peer (blank = auto-pair; set it on both ends)."
+            }
+            Field::Ht40 => {
+                "wifi-ap: softAP secondary channel. ESP-NOW: force the per-peer TX PHY to HT40."
+            }
+            Field::ApLeases => {
+                "DHCP pool size. More than one lease round-robins the flood across every station."
+            }
+            Field::ApBurst => {
+                "Send one frame to every station back-to-back each tick: time-aligned multi-receiver capture."
+            }
             Field::InjectPeriod => "Delay between injected frames. 20000 µs ≈ 50 frames/s.",
-            Field::Reporting => "Whether measurements leave the node: every one, none, only while the channel moves (threshold), or every n-th.",
-            Field::ReportTo => "host = the serial output this GUI reads. local = on-device consumers only (plots stay empty).",
-            Field::ThresholdLevel => "Score at or above which a measurement is reported. Uncalibrated: a still room is not zero, so calibrate on your link.",
+            Field::Reporting => {
+                "Whether measurements leave the node: every one, none, only while the channel moves (threshold), or every n-th."
+            }
+            Field::ReportTo => {
+                "host = the serial output this GUI reads. local = on-device consumers only (plots stay empty)."
+            }
+            Field::ThresholdLevel => {
+                "Score at or above which a measurement is reported. Uncalibrated: a still room is not zero, so calibrate on your link."
+            }
             Field::ThresholdHold => "Keep reporting this long after crossing the threshold.",
             Field::DecimateN => "Report every n-th measurement.",
-            Field::Periodicity => "Rate of the sounding traffic this node generates. 0 disables it.",
-            Field::Unsolicited => "Flood echo replies instead of requests: one-directional traffic, no CSI back to this node.",
-            Field::LogMode => "Output format. serialized is the most compact and carries the most metadata.",
+            Field::Periodicity => {
+                "Rate of the sounding traffic this node generates. 0 disables it."
+            }
+            Field::Unsolicited => {
+                "Flood echo replies instead of requests: one-directional traffic, no CSI back to this node."
+            }
+            Field::LogMode => {
+                "Output format. serialized is the most compact and carries the most metadata."
+            }
             Field::CsiOutput => "Runtime delivery gate: off keeps capturing but delivers nothing.",
             Field::FilterPeer => "Deliver CSI only for frames from this transmitter. Blank = any.",
             Field::FilterMinPhy => "ht drops legacy 11b/g frames.",
             Field::Delivery => "raw is a zero-copy benchmark path: nothing is delivered or logged.",
             Field::PhyRate => "Reporting only, except on the ESP-NOW pair, which applies it.",
-            Field::Preset => "he20: HE-LTF only (legacy, HT and ACK off), for the receivers of an HE20 link.",
+            Field::Preset => {
+                "he20: HE-LTF only (legacy, HT and ACK off), for the receivers of an HE20 link."
+            }
             Field::Duration => "Stop the run by itself after this long. Off = until stopped.",
             _ => "",
         }
@@ -319,10 +347,12 @@ impl Field {
             InjectPeriod | EmitterIface => mode.is_emitter(),
             Reporting | ReportTo => mode.admits_reporting_choice(),
             ThresholdLevel | ThresholdHold => {
-                mode.admits_reporting_choice() && cfg.reporting == crate::protocol::config::Reporting::Threshold
+                mode.admits_reporting_choice()
+                    && cfg.reporting == crate::protocol::config::Reporting::Threshold
             }
             DecimateN => {
-                mode.admits_reporting_choice() && cfg.reporting == crate::protocol::config::Reporting::Decimate
+                mode.admits_reporting_choice()
+                    && cfg.reporting == crate::protocol::config::Reporting::Decimate
             }
             Periodicity | Unsolicited => mode.uses_periodicity(),
             // CSI capture settings mean nothing on a node that captures none.
@@ -354,7 +384,12 @@ pub fn channels_for(chip: ChipFamily) -> Vec<u8> {
 
 /// Render the form for `cfg` on `chip`. Returns `true` when anything
 /// changed. `id` keeps widget ids unique when several forms exist.
-pub fn config_form(ui: &mut egui::Ui, id: impl std::hash::Hash, cfg: &mut EspConfig, chip: ChipFamily) -> bool {
+pub fn config_form(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    cfg: &mut EspConfig,
+    chip: ChipFamily,
+) -> bool {
     let mut changed = false;
     ui.push_id(id, |ui| {
         for section in Section::ALL {
@@ -437,7 +472,13 @@ fn field_editor(ui: &mut egui::Ui, f: Field, cfg: &mut EspConfig, chip: ChipFami
         Field::ApLeases => drag(ui, &mut cfg.ap_leases, 1..=8, ""),
         Field::ApBurst => toggle(ui, &mut cfg.ap_burst),
         Field::InjectPeriod => drag(ui, &mut cfg.inject_period_us, 100..=10_000_000, " µs"),
-        Field::EmitterIface => combo(ui, "iface", &mut cfg.emitter_iface, &EmitterIface::ALL, |i| i.cli()),
+        Field::EmitterIface => combo(
+            ui,
+            "iface",
+            &mut cfg.emitter_iface,
+            &EmitterIface::ALL,
+            |i| i.cli(),
+        ),
         Field::Reporting => {
             let opts: Vec<Reporting> = Reporting::ALL
                 .into_iter()
@@ -446,7 +487,9 @@ fn field_editor(ui: &mut egui::Ui, f: Field, cfg: &mut EspConfig, chip: ChipFami
             combo(ui, "reporting", &mut cfg.reporting, &opts, |r| r.cli())
         }
         Field::ReportTo => {
-            let c = combo(ui, "report_to", &mut cfg.report_to, &ReportTo::ALL, |r| r.cli());
+            let c = combo(ui, "report_to", &mut cfg.report_to, &ReportTo::ALL, |r| {
+                r.cli()
+            });
             if cfg.report_to == ReportTo::Local {
                 ui.end_row();
                 ui.label("");
@@ -462,15 +505,31 @@ fn field_editor(ui: &mut egui::Ui, f: Field, cfg: &mut EspConfig, chip: ChipFami
         Field::DecimateN => drag(ui, &mut cfg.decimate_n, 1..=10_000, ""),
         Field::Periodicity => drag(ui, &mut cfg.periodicity_hz, 0..=10_000, " Hz"),
         Field::Unsolicited => toggle(ui, &mut cfg.unsolicited),
-        Field::LogMode => combo(ui, "log_mode", &mut cfg.log_mode, &LogMode::ALL, |m| m.cli()),
+        Field::LogMode => combo(ui, "log_mode", &mut cfg.log_mode, &LogMode::ALL, |m| {
+            m.cli()
+        }),
         Field::CsiOutput => toggle(ui, &mut cfg.csi_output),
         Field::FilterPeer => mac_edit(ui, &mut cfg.csi_filter_peer, "blank = any"),
-        Field::FilterMinPhy => combo(ui, "min_phy", &mut cfg.csi_filter_min_phy, &MinPhy::ALL, |m| m.cli()),
-        Field::Delivery => combo(ui, "delivery", &mut cfg.csi_delivery, &CsiDelivery::ALL, |d| d.cli()),
+        Field::FilterMinPhy => combo(
+            ui,
+            "min_phy",
+            &mut cfg.csi_filter_min_phy,
+            &MinPhy::ALL,
+            |m| m.cli(),
+        ),
+        Field::Delivery => combo(
+            ui,
+            "delivery",
+            &mut cfg.csi_delivery,
+            &CsiDelivery::ALL,
+            |d| d.cli(),
+        ),
         Field::CsiLogging => toggle(ui, &mut cfg.csi_logging),
         Field::TxTask => toggle(ui, &mut cfg.tx_task),
         Field::RxTask => toggle(ui, &mut cfg.rx_task),
-        Field::PhyRate => combo(ui, "phy_rate", &mut cfg.phy_rate, &PhyRate::ALL, |r| r.cli()),
+        Field::PhyRate => combo(ui, "phy_rate", &mut cfg.phy_rate, &PhyRate::ALL, |r| {
+            r.cli()
+        }),
         Field::Preset => {
             let mut changed = false;
             let current = cfg.csi_preset.clone().unwrap_or_else(|| "custom".into());
@@ -478,7 +537,10 @@ fn field_editor(ui: &mut egui::Ui, f: Field, cfg: &mut EspConfig, chip: ChipFami
                 .selected_text(&current)
                 .width(140.0)
                 .show_ui(ui, |ui| {
-                    if ui.selectable_label(cfg.csi_preset.is_none(), "custom").clicked() {
+                    if ui
+                        .selectable_label(cfg.csi_preset.is_none(), "custom")
+                        .clicked()
+                    {
                         cfg.csi_preset = None;
                         changed = true;
                     }
@@ -606,7 +668,10 @@ mod tests {
     use crate::protocol::config::Reporting as Rep;
 
     fn shown(cfg: &EspConfig, chip: ChipFamily) -> Vec<Field> {
-        Field::ALL.into_iter().filter(|f| f.visible(cfg, chip)).collect()
+        Field::ALL
+            .into_iter()
+            .filter(|f| f.visible(cfg, chip))
+            .collect()
     }
 
     #[test]
@@ -625,7 +690,10 @@ mod tests {
 
     #[test]
     fn mode_decides_node_rows() {
-        let mut cfg = EspConfig { wifi_mode: WifiMode::Station, ..EspConfig::default() };
+        let mut cfg = EspConfig {
+            wifi_mode: WifiMode::Station,
+            ..EspConfig::default()
+        };
         let st = shown(&cfg, ChipFamily::Esp32);
         assert!(st.contains(&Field::StaSsid) && !st.contains(&Field::Channel));
         assert!(!st.contains(&Field::ApLeases));
@@ -651,7 +719,10 @@ mod tests {
 
     #[test]
     fn preset_hides_individual_c5c6_flags() {
-        let cfg = EspConfig { csi_preset: Some("he20".into()), ..EspConfig::default() };
+        let cfg = EspConfig {
+            csi_preset: Some("he20".into()),
+            ..EspConfig::default()
+        };
         let f = shown(&cfg, ChipFamily::Esp32C5);
         assert!(f.contains(&Field::Preset));
         assert!(!f.contains(&Field::C5c6Legacy));

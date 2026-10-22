@@ -5,7 +5,7 @@
 
 use csi_gui_rs::protocol::info::ChipFamily;
 use csi_gui_rs::protocol::parse::parse_array_list;
-use csi_gui_rs::protocol::serialized::{decode_frame, is_text_frame, DecodedFrame};
+use csi_gui_rs::protocol::serialized::{DecodedFrame, decode_frame, is_text_frame};
 
 #[test]
 fn serialized_capture_decodes_completely() {
@@ -39,7 +39,10 @@ fn serialized_capture_decodes_completely() {
     assert_eq!(sessions, 1, "one run announcement");
     assert!(csi >= 10, "only {csi} CSI frames");
     assert!(text > 0);
-    assert!(seqs.windows(2).all(|w| w[1] > w[0]), "stream_seq increases: {seqs:?}");
+    assert!(
+        seqs.windows(2).all(|w| w[1] > w[0]),
+        "stream_seq increases: {seqs:?}"
+    );
 }
 
 #[test]

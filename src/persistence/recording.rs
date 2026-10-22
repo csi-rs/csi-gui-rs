@@ -2,12 +2,12 @@
 //! so the in-memory history can stay a bounded tick window.
 
 use crate::data::CsiData;
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
 const CHANNEL_CAP: usize = 64;
@@ -92,7 +92,10 @@ impl SessionRecorder {
         match tx.try_send(RecorderMsg::Batch(packets.to_vec())) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                log::warn!("session recorder channel full — dropping batch of {} packets", packets.len());
+                log::warn!(
+                    "session recorder channel full — dropping batch of {} packets",
+                    packets.len()
+                );
             }
             Err(TrySendError::Disconnected(_)) => {
                 self.sender = None;

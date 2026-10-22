@@ -8,14 +8,22 @@ fn wait_for(events: &Receiver<ReaderEvent>, mut pred: impl FnMut(&ReaderEvent) -
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         if let Ok(ev) = events.recv_timeout(Duration::from_millis(100))
-            && pred(&ev) {
-                return true;
-            }
+            && pred(&ev)
+        {
+            return true;
+        }
     }
     false
 }
 
-fn connect(port: &str) -> (ReaderHandles, Arc<EspSharedState>, Arc<RawConsole>, DeviceInfo) {
+fn connect(
+    port: &str,
+) -> (
+    ReaderHandles,
+    Arc<EspSharedState>,
+    Arc<RawConsole>,
+    DeviceInfo,
+) {
     let shared = EspSharedState::handle();
     let console = Arc::new(RawConsole::new(500));
     let h = spawn_reader_with(SimBackend::default(), shared.clone(), console.clone());
@@ -54,7 +62,10 @@ fn identifies_and_streams_wire_v1() {
     let cfg = EspConfig::default();
     assert_eq!(cfg.log_mode, LogMode::Serialized);
     h.commands
-        .send(EspCommand::ApplyConfig { cfg: Box::new(cfg.clone()), chip: info.chip })
+        .send(EspCommand::ApplyConfig {
+            cfg: Box::new(cfg.clone()),
+            chip: info.chip,
+        })
         .unwrap();
     h.commands
         .send(EspCommand::Start {
@@ -88,13 +99,19 @@ fn identifies_and_streams_wire_v1() {
         assert_eq!(p.ppdu, "Ht");
         assert!(p.host_time_us > 0);
     }
-    assert!(pkts.windows(2).all(|w| w[1].stream_seq == w[0].stream_seq + 1));
+    assert!(
+        pkts.windows(2)
+            .all(|w| w[1].stream_seq == w[0].stream_seq + 1)
+    );
     assert_eq!(shared.frames_decode_failed.load(Ordering::Relaxed), 0);
     assert_eq!(shared.frames_lost.load(Ordering::Relaxed), 0);
     assert_eq!(shared.session_id.load(Ordering::Relaxed), 0xC0FFEE);
     // The CLI's own text reached the console, not the decoder.
     let lines: Vec<String> = console.snapshot(None).into_iter().map(|(_, l)| l).collect();
-    assert!(lines.iter().any(|l| l.contains("Starting CSI collection")), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("Starting CSI collection")),
+        "{lines:?}"
+    );
 
     h.commands.send(EspCommand::Stop).unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -110,14 +127,24 @@ fn streams_array_list_with_mac_tail() {
         ..EspConfig::default()
     };
     h.commands
-        .send(EspCommand::ApplyConfig { cfg: Box::new(cfg.clone()), chip: info.chip })
+        .send(EspCommand::ApplyConfig {
+            cfg: Box::new(cfg.clone()),
+            chip: info.chip,
+        })
         .unwrap();
     h.commands
-        .send(EspCommand::Start { duration_sec: None, log_mode: cfg.log_mode, session: None })
+        .send(EspCommand::Start {
+            duration_sec: None,
+            log_mode: cfg.log_mode,
+            session: None,
+        })
         .unwrap();
     let pkts = collect(&h, 5);
     assert_eq!(pkts.len(), 5);
-    assert!(pkts.iter().all(|p| p.is_decoded() && p.mac == "5A:1E:FF:00:00:02"));
+    assert!(
+        pkts.iter()
+            .all(|p| p.is_decoded() && p.mac == "5A:1E:FF:00:00:02")
+    );
     h.commands.send(EspCommand::Shutdown).unwrap();
 }
 
@@ -127,19 +154,32 @@ fn timed_run_ends_by_itself() {
     assert_eq!(info.chip, ChipFamily::Esp32C5);
     let cfg = EspConfig::default();
     h.commands
-        .send(EspCommand::ApplyConfig { cfg: Box::new(cfg.clone()), chip: info.chip })
+        .send(EspCommand::ApplyConfig {
+            cfg: Box::new(cfg.clone()),
+            chip: info.chip,
+        })
         .unwrap();
     h.commands
-        .send(EspCommand::Start { duration_sec: Some(1), log_mode: cfg.log_mode, session: None })
+        .send(EspCommand::Start {
+            duration_sec: Some(1),
+            log_mode: cfg.log_mode,
+            session: None,
+        })
         .unwrap();
-    assert!(wait_for(&h.events, |ev| matches!(ev, ReaderEvent::CollectionEnded)));
+    assert!(wait_for(&h.events, |ev| matches!(
+        ev,
+        ReaderEvent::CollectionEnded
+    )));
     assert!(!shared.is_collecting.load(Ordering::Relaxed));
     h.commands.send(EspCommand::Shutdown).unwrap();
 }
 
 #[test]
 fn banner_needs_line_start_and_terminator() {
-    assert!(banner_match(b"noise\nESP-CSI-CLI/0.10.1\r\n", b"ESP-CSI-CLI/"));
+    assert!(banner_match(
+        b"noise\nESP-CSI-CLI/0.10.1\r\n",
+        b"ESP-CSI-CLI/"
+    ));
     assert!(!banner_match(b"xESP-CSI-CLI/0.10.1\r\n", b"ESP-CSI-CLI/"));
     assert!(!banner_match(b"ESP-CSI-CLI/0.10", b"ESP-CSI-CLI/"));
 }

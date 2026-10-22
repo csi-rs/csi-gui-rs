@@ -72,10 +72,7 @@ where
             let x0 = rect.left() + t0 * rect.width();
             let x1 = rect.left() + t1 * rect.width();
             painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(x0, rect.top()),
-                    egui::pos2(x1, rect.bottom()),
-                ),
+                egui::Rect::from_min_max(egui::pos2(x0, rect.top()), egui::pos2(x1, rect.bottom())),
                 0.0,
                 map((t0 + t1) * 0.5),
             );

@@ -3,8 +3,8 @@
 //! Built entirely out of atomics so neither side ever blocks on the other
 //! for flags and counters.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 /// Default serial baud rate. Matches the [`esp-csi-cli-rs`] firmware
 /// default (`espflash monitor` also defaults to this).

@@ -165,7 +165,10 @@ impl WifiMode {
     pub fn uses_ht40(self) -> bool {
         matches!(
             self,
-            Self::WifiAp | Self::EspNowInitiator | Self::EspNowResponder | Self::EspNowSimplexSource
+            Self::WifiAp
+                | Self::EspNowInitiator
+                | Self::EspNowResponder
+                | Self::EspNowSimplexSource
         )
     }
 
@@ -558,34 +561,74 @@ pub enum PhyRate {
     R5m5,
     #[serde(alias = "R11mL")]
     R11m,
-    R6m, R9m, R12m, R18m, R24m, R36m, R48m, R54m,
-    Mcs0Lgi, Mcs1Lgi, Mcs2Lgi, Mcs3Lgi, Mcs4Lgi, Mcs5Lgi, Mcs6Lgi, Mcs7Lgi,
+    R6m,
+    R9m,
+    R12m,
+    R18m,
+    R24m,
+    R36m,
+    R48m,
+    R54m,
+    Mcs0Lgi,
+    Mcs1Lgi,
+    Mcs2Lgi,
+    Mcs3Lgi,
+    Mcs4Lgi,
+    Mcs5Lgi,
+    Mcs6Lgi,
+    Mcs7Lgi,
     Mcs0Sgi,
 }
 
 impl PhyRate {
     /// Every variant in declaration order — used for round-robin cycling.
     pub const ALL: [PhyRate; 21] = [
-        PhyRate::R1m, PhyRate::R2m, PhyRate::R5m5,
-        PhyRate::R11m, PhyRate::R6m, PhyRate::R9m, PhyRate::R12m,
-        PhyRate::R18m, PhyRate::R24m, PhyRate::R36m, PhyRate::R48m, PhyRate::R54m,
-        PhyRate::Mcs0Lgi, PhyRate::Mcs1Lgi, PhyRate::Mcs2Lgi, PhyRate::Mcs3Lgi,
-        PhyRate::Mcs4Lgi, PhyRate::Mcs5Lgi, PhyRate::Mcs6Lgi, PhyRate::Mcs7Lgi,
+        PhyRate::R1m,
+        PhyRate::R2m,
+        PhyRate::R5m5,
+        PhyRate::R11m,
+        PhyRate::R6m,
+        PhyRate::R9m,
+        PhyRate::R12m,
+        PhyRate::R18m,
+        PhyRate::R24m,
+        PhyRate::R36m,
+        PhyRate::R48m,
+        PhyRate::R54m,
+        PhyRate::Mcs0Lgi,
+        PhyRate::Mcs1Lgi,
+        PhyRate::Mcs2Lgi,
+        PhyRate::Mcs3Lgi,
+        PhyRate::Mcs4Lgi,
+        PhyRate::Mcs5Lgi,
+        PhyRate::Mcs6Lgi,
+        PhyRate::Mcs7Lgi,
         PhyRate::Mcs0Sgi,
     ];
 
     /// CLI token used by `set-rate --rate=…`.
     pub fn cli(self) -> &'static str {
         match self {
-            Self::R1m => "1m", Self::R2m => "2m",
-            Self::R5m5 => "5m5", Self::R11m => "11m",
-            Self::R6m => "6m", Self::R9m => "9m",
-            Self::R12m => "12m", Self::R18m => "18m", Self::R24m => "24m",
-            Self::R36m => "36m", Self::R48m => "48m", Self::R54m => "54m",
-            Self::Mcs0Lgi => "mcs0-lgi", Self::Mcs1Lgi => "mcs1-lgi",
-            Self::Mcs2Lgi => "mcs2-lgi", Self::Mcs3Lgi => "mcs3-lgi",
-            Self::Mcs4Lgi => "mcs4-lgi", Self::Mcs5Lgi => "mcs5-lgi",
-            Self::Mcs6Lgi => "mcs6-lgi", Self::Mcs7Lgi => "mcs7-lgi",
+            Self::R1m => "1m",
+            Self::R2m => "2m",
+            Self::R5m5 => "5m5",
+            Self::R11m => "11m",
+            Self::R6m => "6m",
+            Self::R9m => "9m",
+            Self::R12m => "12m",
+            Self::R18m => "18m",
+            Self::R24m => "24m",
+            Self::R36m => "36m",
+            Self::R48m => "48m",
+            Self::R54m => "54m",
+            Self::Mcs0Lgi => "mcs0-lgi",
+            Self::Mcs1Lgi => "mcs1-lgi",
+            Self::Mcs2Lgi => "mcs2-lgi",
+            Self::Mcs3Lgi => "mcs3-lgi",
+            Self::Mcs4Lgi => "mcs4-lgi",
+            Self::Mcs5Lgi => "mcs5-lgi",
+            Self::Mcs6Lgi => "mcs6-lgi",
+            Self::Mcs7Lgi => "mcs7-lgi",
             Self::Mcs0Sgi => "mcs0-sgi",
         }
     }
@@ -863,7 +906,10 @@ impl EspConfig {
             ));
         }
         if self.he20 && !(chip.is_c5c6() || chip == ChipFamily::Unknown) {
-            return Err(format!("HE20 needs an ESP32-C5/C6 (this is an {})", chip.label()));
+            return Err(format!(
+                "HE20 needs an ESP32-C5/C6 (this is an {})",
+                chip.label()
+            ));
         }
         Ok(())
     }
@@ -892,10 +938,7 @@ pub fn valid_peer_mac(mac: &str) -> bool {
 /// number the firmware will accept. Used to gate the channel-picker in
 /// the config panel and to fail `EspConfig::validate` early.
 pub fn valid_channel(c: u8) -> bool {
-    matches!(
-        c,
-        1..=14 | 36 | 40 | 44 | 48 | 149 | 153 | 157 | 161 | 165
-    )
+    matches!(c, 1..=14 | 36 | 40 | 44 | 48 | 149 | 153 | 157 | 161 | 165)
 }
 
 /// Parse an `aa:bb:cc:dd:ee:ff` MAC into six bytes. Case-insensitive;

@@ -35,7 +35,10 @@ fn main() -> eframe::Result<()> {
     }
 
     if !cfg!(feature = "rerun") && !matches!(cli.app.rerun, Transport::Off) {
-        log::warn!("--rerun={} ignored: built without --features rerun", cli.app.rerun.label());
+        log::warn!(
+            "--rerun={} ignored: built without --features rerun",
+            cli.app.rerun.label()
+        );
     }
 
     let native = eframe::NativeOptions {
@@ -111,7 +114,10 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
             _ => (arg.clone(), None),
         };
         let mut value = |name: &str| -> Result<String, String> {
-            inline.clone().or_else(|| args.pop()).ok_or_else(|| format!("{name} expects a value"))
+            inline
+                .clone()
+                .or_else(|| args.pop())
+                .ok_or_else(|| format!("{name} expects a value"))
         };
         match flag.as_str() {
             "-h" | "--help" => {
@@ -157,11 +163,17 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
             port => app.ports.push(port.to_string()),
         }
     }
-    Ok(Cli { app, data_dir, probe })
+    Ok(Cli {
+        app,
+        data_dir,
+        probe,
+    })
 }
 
 fn parse_num<T: std::str::FromStr>(v: &str, name: &str) -> Result<T, String> {
-    v.trim().parse().map_err(|_| format!("invalid {name}: {v:?}"))
+    v.trim()
+        .parse()
+        .map_err(|_| format!("invalid {name}: {v:?}"))
 }
 
 fn parse_rerun_mode(s: &str) -> Result<Transport, String> {
@@ -216,7 +228,9 @@ mod tests {
 
     #[test]
     fn probe_subcommand() {
-        let c = parse("probe --seconds=3 --channel 11 --log-mode=array-list --esp-now-pair /dev/ttyUSB0");
+        let c = parse(
+            "probe --seconds=3 --channel 11 --log-mode=array-list --esp-now-pair /dev/ttyUSB0",
+        );
         let p = c.probe.unwrap();
         assert_eq!(p.seconds, 3);
         assert_eq!(p.channel, Some(11));

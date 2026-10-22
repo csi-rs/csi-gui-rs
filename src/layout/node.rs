@@ -178,9 +178,7 @@ impl LayoutNode {
         match self {
             LayoutNode::Pane { id, view } if *id == target => Some(*view),
             LayoutNode::Pane { .. } => None,
-            LayoutNode::Split { children, .. } => {
-                children.iter().find_map(|c| c.find_view(target))
-            }
+            LayoutNode::Split { children, .. } => children.iter().find_map(|c| c.find_view(target)),
         }
     }
 
@@ -222,11 +220,9 @@ impl LayoutNode {
                 true
             }
             LayoutNode::Pane { .. } => false,
-            LayoutNode::Split { children, .. } => {
-                children
-                    .iter_mut()
-                    .any(|c| c.split_pane(target, direction, next_id))
-            }
+            LayoutNode::Split { children, .. } => children
+                .iter_mut()
+                .any(|c| c.split_pane(target, direction, next_id)),
         }
     }
 

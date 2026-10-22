@@ -24,16 +24,18 @@
 
 use crate::console::RawConsole;
 use crate::data::CsiData;
-use crate::protocol::command::{render_apply_config, render_restart, render_set_session, render_start, EspCommand};
+use crate::protocol::command::{
+    EspCommand, render_apply_config, render_restart, render_set_session, render_start,
+};
 use crate::protocol::config::LogMode;
 use crate::protocol::info::{ChipFamily, DeviceInfo};
-use crate::protocol::parse::{parse_array_list, parse_esp_csi_tool, TextParser};
-use crate::protocol::serialized::{decode_frame, DecodedFrame, FrameError, SessionAnnounce};
+use crate::protocol::parse::{TextParser, parse_array_list, parse_esp_csi_tool};
+use crate::protocol::serialized::{DecodedFrame, FrameError, SessionAnnounce, decode_frame};
 use crate::shared::EspSharedState;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -81,7 +83,10 @@ impl ConnState {
 
     /// `true` for the states that need the user to do something.
     pub fn is_problem(&self) -> bool {
-        matches!(self, Self::UnknownFirmware | Self::Incompatible(_) | Self::Error(_))
+        matches!(
+            self,
+            Self::UnknownFirmware | Self::Incompatible(_) | Self::Error(_)
+        )
     }
 }
 
@@ -482,7 +487,9 @@ impl Reader {
         let deadline = Instant::now() + dur;
         let mut buf = [0u8; 1024];
         while Instant::now() < deadline {
-            let Some(port) = self.port.as_mut() else { return };
+            let Some(port) = self.port.as_mut() else {
+                return;
+            };
             match port.read(&mut buf) {
                 Ok(0) => return,
                 Ok(n) => push_printable(&self.console, &buf[..n]),
@@ -499,7 +506,9 @@ impl Reader {
         let mut acc: Vec<u8> = Vec::with_capacity(4096);
         let mut buf = [0u8; 256];
         while Instant::now() < deadline {
-            let Some(port) = self.port.as_mut() else { return false };
+            let Some(port) = self.port.as_mut() else {
+                return false;
+            };
             match port.read(&mut buf) {
                 Ok(0) => return false,
                 Ok(n) => {
@@ -581,7 +590,9 @@ impl Reader {
         let mut acc: Vec<u8> = Vec::new();
         let mut buf = [0u8; 512];
         while Instant::now() < deadline {
-            let Some(port) = self.port.as_mut() else { return };
+            let Some(port) = self.port.as_mut() else {
+                return;
+            };
             match port.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -609,7 +620,9 @@ impl Reader {
     }
 
     fn send_bytes(&mut self, bytes: &[u8]) {
-        let Some(port) = self.port.as_mut() else { return };
+        let Some(port) = self.port.as_mut() else {
+            return;
+        };
         let port = port.get_mut();
         let _ = port.write_all(bytes);
         let _ = port.flush();
@@ -659,7 +672,11 @@ impl Reader {
     fn read_one(&mut self) -> ReadOutcome {
         let mode = LogMode::from_id(self.shared.log_mode_id.load(Ordering::Acquire));
         let collecting = self.collecting();
-        let delim = if collecting && mode == LogMode::Serialized { b'\0' } else { b'\n' };
+        let delim = if collecting && mode == LogMode::Serialized {
+            b'\0'
+        } else {
+            b'\n'
+        };
 
         let Some(port) = self.port.as_mut() else {
             return ReadOutcome::Idle;
@@ -737,7 +754,9 @@ impl Reader {
                         let gap = p.stream_seq.wrapping_sub(prev).wrapping_sub(1);
                         // A huge "gap" is a counter reset, not loss.
                         if gap > 0 && gap < 1 << 20 {
-                            self.shared.frames_lost.fetch_add(gap as u64, Ordering::Relaxed);
+                            self.shared
+                                .frames_lost
+                                .fetch_add(gap as u64, Ordering::Relaxed);
                         }
                     }
                     self.last_seq = Some(p.stream_seq);
@@ -747,7 +766,9 @@ impl Reader {
             Ok(DecodedFrame::Session(s)) => {
                 // Not a measurement: don't count it towards the decode rate.
                 self.shared.frames_total.fetch_sub(1, Ordering::Relaxed);
-                self.shared.session_id.store(s.session_id, Ordering::Relaxed);
+                self.shared
+                    .session_id
+                    .store(s.session_id, Ordering::Relaxed);
                 self.last_seq = None;
                 self.console.push(format!(
                     "session 0x{:08x} from {} ({}, esp-csi-rs {}.{}.{})",
@@ -765,7 +786,9 @@ impl Reader {
                 self.console.push(t);
             }
             Ok(DecodedFrame::Unplottable) => {
-                self.shared.frames_unplottable.fetch_add(1, Ordering::Relaxed);
+                self.shared
+                    .frames_unplottable
+                    .fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 self.shared

@@ -24,9 +24,12 @@ pub mod profile;
 pub mod serialized;
 // Vendored verbatim from esp-csi-rs; its intra-doc links point at `crate::wire`.
 #[allow(rustdoc::broken_intra_doc_links, missing_docs, clippy::all)]
+#[rustfmt::skip] // must stay byte-identical to esp-csi-rs (scripts/sync-wire.sh --check)
 pub mod wire;
 
 pub use command::EspCommand;
-pub use config::{CsiDelivery, EspConfig, LogMode, PhyRate, ReportTo, Reporting, WifiMode, WifiProtocol};
+pub use config::{
+    CsiDelivery, EspConfig, LogMode, PhyRate, ReportTo, Reporting, WifiMode, WifiProtocol,
+};
 pub use info::{ChipFamily, DeviceInfo};
 pub use profile::{CsiProfile, StandardCsiProfile};

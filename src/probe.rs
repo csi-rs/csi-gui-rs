@@ -143,7 +143,9 @@ pub fn run(opts: &ProbeOptions) -> Vec<ProbeResult> {
     }
 
     // Configure.
-    let ready: Vec<usize> = (0..m.sessions.len()).filter(|&i| m.sessions[i].is_ready()).collect();
+    let ready: Vec<usize> = (0..m.sessions.len())
+        .filter(|&i| m.sessions[i].is_ready())
+        .collect();
     for &i in &ready {
         let s = &mut m.sessions[i];
         s.cfg.log_mode = opts.log_mode;
@@ -245,8 +247,16 @@ pub fn run(opts: &ProbeOptions) -> Vec<ProbeResult> {
                     .map(|c| c.subcarriers())
                     .unwrap_or(0),
                 rssi: (packets[i] > 0).then(|| (rssi_sum[i] / packets[i] as i64) as i32),
-                recording: s.recorder.last_recording().map(|r| r.path.display().to_string()),
-                console_tail: s.console.snapshot(Some(60)).into_iter().map(|(_, l)| l).collect(),
+                recording: s
+                    .recorder
+                    .last_recording()
+                    .map(|r| r.path.display().to_string()),
+                console_tail: s
+                    .console
+                    .snapshot(Some(60))
+                    .into_iter()
+                    .map(|(_, l)| l)
+                    .collect(),
             }
         })
         .collect();
@@ -275,7 +285,11 @@ pub fn report(results: &[ProbeResult], seconds: u64) -> bool {
             r.packets as f64 / seconds.max(1) as f64,
             r.decode_pct,
             r.lost,
-            if r.session == 0 { "-".to_string() } else { format!("{:08x}", r.session) },
+            if r.session == 0 {
+                "-".to_string()
+            } else {
+                format!("{:08x}", r.session)
+            },
             r.subcarriers,
             r.rssi.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
             if ok { "OK" } else { "FAIL" }
@@ -289,10 +303,16 @@ pub fn report(results: &[ProbeResult], seconds: u64) -> bool {
             }
         }
     }
-    let sessions: std::collections::BTreeSet<u32> =
-        results.iter().filter(|r| r.session != 0).map(|r| r.session).collect();
+    let sessions: std::collections::BTreeSet<u32> = results
+        .iter()
+        .filter(|r| r.session != 0)
+        .map(|r| r.session)
+        .collect();
     if sessions.len() == 1 && results.iter().filter(|r| r.session != 0).count() > 1 {
-        println!("all collecting devices share session {:08x}", sessions.iter().next().unwrap());
+        println!(
+            "all collecting devices share session {:08x}",
+            sessions.iter().next().unwrap()
+        );
     }
     all_ok
 }

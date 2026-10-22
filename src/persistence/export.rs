@@ -204,7 +204,11 @@ pub fn export_packets(
 /// # Errors
 ///
 /// The underlying I/O error if the file cannot be written.
-pub fn write_packets(path: &Path, packets: &[CsiData], format: ExportFormat) -> std::io::Result<()> {
+pub fn write_packets(
+    path: &Path,
+    packets: &[CsiData],
+    format: ExportFormat,
+) -> std::io::Result<()> {
     match format {
         ExportFormat::Csv => write_csv(path, packets),
         ExportFormat::Json => write_jsonl(path, packets),
@@ -417,7 +421,14 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let pkts: Vec<CsiData> = (1..=3).map(sample_packet).collect();
         let written = export_packets(&dir, "/dev/ttyACM0", &pkts, format).unwrap();
-        assert!(written.file_name().unwrap().to_str().unwrap().starts_with("dev-ttyACM0_"));
+        assert!(
+            written
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("dev-ttyACM0_")
+        );
         let out = import_packets(&written).unwrap();
         let _ = fs::remove_dir_all(&dir);
         out

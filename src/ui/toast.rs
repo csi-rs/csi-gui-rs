@@ -28,7 +28,10 @@ impl Toasts {
     pub fn push(&mut self, notice: Notice) {
         // Collapse an identical toast still on screen instead of stacking it.
         self.items.retain(|t| t.notice != notice);
-        self.items.push(Toast { notice, born: Instant::now() });
+        self.items.push(Toast {
+            notice,
+            born: Instant::now(),
+        });
         if self.items.len() > 32 {
             self.items.remove(0);
         }

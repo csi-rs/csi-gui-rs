@@ -34,7 +34,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             let (color, text) = match (connected, collecting) {
                 (false, _) => (egui::Color32::from_rgb(220, 80, 80), "● offline"),
                 (true, false) => (egui::Color32::from_rgb(120, 190, 255), "● ready"),
-                (true, true) if decode_pct < 80 => (egui::Color32::from_rgb(220, 200, 60), "● collecting"),
+                (true, true) if decode_pct < 80 => {
+                    (egui::Color32::from_rgb(220, 200, 60), "● collecting")
+                }
                 (true, true) => (egui::Color32::from_rgb(80, 220, 110), "● collecting"),
             };
             ui.colored_label(color, text);
@@ -42,12 +44,18 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             ui.label(format!("· {decode_pct}% decoded"));
             ui.label(format!("· {total} frames"));
             if lost > 0 {
-                ui.colored_label(egui::Color32::from_rgb(220, 180, 60), format!("· {lost} lost"))
-                    .on_hover_text("Gaps in the device's frame counter: lost between radio and host.");
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 60),
+                    format!("· {lost} lost"),
+                )
+                .on_hover_text("Gaps in the device's frame counter: lost between radio and host.");
             }
             if dropped > 0 {
-                ui.colored_label(egui::Color32::from_rgb(220, 180, 60), format!("· {dropped} dropped"))
-                    .on_hover_text("Decoded but dropped because the UI fell behind.");
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 180, 60),
+                    format!("· {dropped} dropped"),
+                )
+                .on_hover_text("Decoded but dropped because the UI fell behind.");
             }
             if session != 0 {
                 ui.label(egui::RichText::new(format!("· session {session:08x}")).weak());
@@ -60,7 +68,15 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     let stats = ctx.history.resolve_anchor(ctx.view_anchor());
 
     let pps = stats.map(|s| s.pps as f32).unwrap_or(0.0);
-    gauge(ui, "Packets / s", pps, 0.0, 1000.0, &format!("{pps:.0}"), ctx);
+    gauge(
+        ui,
+        "Packets / s",
+        pps,
+        0.0,
+        1000.0,
+        &format!("{pps:.0}"),
+        ctx,
+    );
 
     let snr = stats.map(|s| s.snr as f32).unwrap_or(0.0);
     gauge(ui, "SNR", snr, 0.0, 60.0, &format!("{snr:.0} dB"), ctx);

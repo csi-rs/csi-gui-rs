@@ -1,6 +1,6 @@
 //! Devices pane: every connected board in one table, live.
 
-use super::{title_bar, ViewCtx};
+use super::{ViewCtx, title_bar};
 use crate::reader::ConnState;
 use std::sync::atomic::Ordering;
 
@@ -9,7 +9,9 @@ pub fn state_badge(s: &ConnState, collecting: bool) -> (egui::Color32, &'static 
     match s {
         ConnState::Streaming if collecting => (egui::Color32::from_rgb(80, 220, 110), "collecting"),
         ConnState::Streaming => (egui::Color32::from_rgb(120, 190, 255), "ready"),
-        ConnState::Opening | ConnState::Identifying => (egui::Color32::from_rgb(220, 200, 60), "connecting"),
+        ConnState::Opening | ConnState::Identifying => {
+            (egui::Color32::from_rgb(220, 200, 60), "connecting")
+        }
         ConnState::Disconnected => (egui::Color32::from_gray(150), "offline"),
         ConnState::UnknownFirmware => (egui::Color32::from_rgb(230, 80, 80), "unknown fw"),
         ConnState::Incompatible(_) => (egui::Color32::from_rgb(230, 80, 80), "incompatible"),
@@ -23,9 +25,11 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
     if ctx.devices.is_empty() {
         ui.centered_and_justified(|ui| {
             ui.label(
-                egui::RichText::new("No devices. Use the Devices panel → Add, or Ctrl+K → \"attach\".")
-                    .weak()
-                    .italics(),
+                egui::RichText::new(
+                    "No devices. Use the Devices panel → Add, or Ctrl+K → \"attach\".",
+                )
+                .weak()
+                .italics(),
             );
         });
         return;
@@ -36,8 +40,18 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             .spacing([14.0, 6.0])
             .show(ui, |ui| {
                 for h in [
-                    "", "Device", "State", "Chip / firmware", "Mode", "Ch", "pps", "RSSI", "Decoded",
-                    "Lost", "Dropped", "Session",
+                    "",
+                    "Device",
+                    "State",
+                    "Chip / firmware",
+                    "Mode",
+                    "Ch",
+                    "pps",
+                    "RSSI",
+                    "Decoded",
+                    "Lost",
+                    "Dropped",
+                    "Session",
                 ] {
                     ui.label(egui::RichText::new(h).strong().small());
                 }
@@ -48,7 +62,9 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     ui.label(egui::RichText::new("●").color(d.color).size(16.0));
                     ui.vertical(|ui| {
                         ui.add(egui::Label::new(egui::RichText::new(&d.label).strong()).extend());
-                        ui.add(egui::Label::new(egui::RichText::new(d.port).weak().small()).extend());
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(d.port).weak().small()).extend(),
+                        );
                     });
                     let (col, text) = state_badge(d.state, collecting);
                     let mut r = ui.colored_label(col, text);
@@ -69,8 +85,14 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                             .map(|c| c.channel.to_string())
                             .unwrap_or_else(|| d.cfg.channel.to_string()),
                     );
-                    ui.label(last.map(|s| s.pps.to_string()).unwrap_or_else(|| "0".into()));
-                    ui.label(last.map(|s| format!("{} dBm", s.rssi)).unwrap_or_else(|| "—".into()));
+                    ui.label(
+                        last.map(|s| s.pps.to_string())
+                            .unwrap_or_else(|| "0".into()),
+                    );
+                    ui.label(
+                        last.map(|s| format!("{} dBm", s.rssi))
+                            .unwrap_or_else(|| "—".into()),
+                    );
                     let pct = d.shared.decode_rate() * 100.0;
                     let pct_col = if pct < 90.0 {
                         egui::Color32::from_rgb(220, 180, 60)
@@ -81,7 +103,11 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     ui.label(d.shared.frames_lost.load(Ordering::Relaxed).to_string());
                     ui.label(d.shared.frames_dropped.load(Ordering::Relaxed).to_string());
                     let sid = d.shared.session_id.load(Ordering::Relaxed);
-                    ui.label(if sid == 0 { "—".to_string() } else { format!("{sid:08x}") });
+                    ui.label(if sid == 0 {
+                        "—".to_string()
+                    } else {
+                        format!("{sid:08x}")
+                    });
                     ui.end_row();
                 }
             });

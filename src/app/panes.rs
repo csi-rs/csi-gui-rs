@@ -8,7 +8,7 @@ use super::App;
 use crate::device::DeviceManager;
 use crate::layout::{LayoutNode, MAX_PANES, SplitDirection, ViewType};
 use crate::theme::Theme;
-use crate::views::{render_view, DeviceView, ReplayState, ViewCtx, ViewStates};
+use crate::views::{DeviceView, ReplayState, ViewCtx, ViewStates, render_view};
 
 /// A header action, applied after the frame's panes are drawn.
 enum PaneIntent {
@@ -29,7 +29,11 @@ struct PaneEnv<'a> {
     theme: &'a Theme,
     focused: usize,
     pane_count: usize,
-    fallback: (&'a crate::data::History, &'a std::sync::Arc<crate::shared::EspSharedState>, &'a std::sync::Arc<crate::console::RawConsole>),
+    fallback: (
+        &'a crate::data::History,
+        &'a std::sync::Arc<crate::shared::EspSharedState>,
+        &'a std::sync::Arc<crate::console::RawConsole>,
+    ),
     intents: Vec<PaneIntent>,
 }
 
@@ -69,7 +73,11 @@ impl App {
             theme: &self.theme,
             focused: self.tiling.focused,
             pane_count: self.tiling.pane_count(),
-            fallback: (&self.fallback_history, &self.fallback_shared, &self.fallback_console),
+            fallback: (
+                &self.fallback_history,
+                &self.fallback_shared,
+                &self.fallback_console,
+            ),
             intents: Vec::new(),
         };
         render_node(&mut env, ui, &root);
@@ -140,7 +148,11 @@ fn render_node(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, node: &LayoutNode) {
 
 fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewType) {
     let focused = id == env.focused;
-    let border = if focused { env.theme.focused_border } else { env.theme.normal_border };
+    let border = if focused {
+        env.theme.focused_border
+    } else {
+        env.theme.normal_border
+    };
 
     // Which device this pane shows: its binding, else the active device.
     let binding = env.view_states.get_or_default(id).device.clone();
@@ -148,10 +160,17 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
         .as_deref()
         .and_then(|b| env.ids.iter().position(|i| i == b))
         .or(env.devices.active);
-    let stale_binding = binding.is_some() && binding.as_deref().and_then(|b| env.ids.iter().position(|i| i == b)).is_none();
+    let stale_binding = binding.is_some()
+        && binding
+            .as_deref()
+            .and_then(|b| env.ids.iter().position(|i| i == b))
+            .is_none();
 
     egui::Frame::default()
-        .stroke(egui::Stroke::new(if focused { 2.0_f32 } else { 1.0_f32 }, border))
+        .stroke(egui::Stroke::new(
+            if focused { 2.0_f32 } else { 1.0_f32 },
+            border,
+        ))
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
             let resp = ui.interact(
@@ -169,7 +188,11 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
                         egui::RichText::new(format!("#{id}"))
                             .strong()
                             .size(15.0)
-                            .color(if focused { env.theme.focused_border } else { env.theme.text_highlight }),
+                            .color(if focused {
+                                env.theme.focused_border
+                            } else {
+                                env.theme.text_highlight
+                            }),
                     );
                     egui::ComboBox::from_id_salt(("pane-view", id))
                         .selected_text(view.label())
@@ -188,12 +211,23 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
                     // collides with the pickers in a narrow pane.
                     ui.menu_button("☰", |ui| {
                         let can_split = env.pane_count < MAX_PANES;
-                        if ui.add_enabled(can_split, egui::Button::new("Split into columns   Shift+→")).clicked() {
-                            env.intents.push(PaneIntent::Split(id, SplitDirection::Horizontal));
+                        if ui
+                            .add_enabled(
+                                can_split,
+                                egui::Button::new("Split into columns   Shift+→"),
+                            )
+                            .clicked()
+                        {
+                            env.intents
+                                .push(PaneIntent::Split(id, SplitDirection::Horizontal));
                             ui.close();
                         }
-                        if ui.add_enabled(can_split, egui::Button::new("Split into rows   Shift+↓")).clicked() {
-                            env.intents.push(PaneIntent::Split(id, SplitDirection::Vertical));
+                        if ui
+                            .add_enabled(can_split, egui::Button::new("Split into rows   Shift+↓"))
+                            .clicked()
+                        {
+                            env.intents
+                                .push(PaneIntent::Split(id, SplitDirection::Vertical));
                             ui.close();
                         }
                         if ui.button("Fullscreen   Space").clicked() {
@@ -201,7 +235,10 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
                             ui.close();
                         }
                         ui.separator();
-                        if ui.add_enabled(env.pane_count > 1, egui::Button::new("Close pane   Del")).clicked() {
+                        if ui
+                            .add_enabled(env.pane_count > 1, egui::Button::new("Close pane   Del"))
+                            .clicked()
+                        {
                             env.intents.push(PaneIntent::Close(id));
                             ui.close();
                         }
@@ -225,9 +262,23 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
                             let (history, shared, console, info, label, color) = match bound {
                                 Some(i) => {
                                     let d = &env.devices.sessions[i];
-                                    (&d.history, &d.shared, &d.console, d.info.as_ref(), env.views[i].label.as_str(), d.color)
+                                    (
+                                        &d.history,
+                                        &d.shared,
+                                        &d.console,
+                                        d.info.as_ref(),
+                                        env.views[i].label.as_str(),
+                                        d.color,
+                                    )
                                 }
-                                None => (env.fallback.0, env.fallback.1, env.fallback.2, None, "", env.theme.text_highlight),
+                                None => (
+                                    env.fallback.0,
+                                    env.fallback.1,
+                                    env.fallback.2,
+                                    None,
+                                    "",
+                                    env.theme.text_highlight,
+                                ),
                             };
                             let mut ctx = ViewCtx {
                                 history,
@@ -262,8 +313,12 @@ fn device_picker(
 ) {
     let text = match (binding, bound) {
         (Some(_), _) if stale => egui::RichText::new("● (gone)").color(egui::Color32::GRAY),
-        (Some(_), Some(i)) => egui::RichText::new(format!("● {}", env.views[i].label)).color(env.views[i].color),
-        (None, Some(i)) => egui::RichText::new(format!("↻ {}", env.views[i].label)).color(env.views[i].color),
+        (Some(_), Some(i)) => {
+            egui::RichText::new(format!("● {}", env.views[i].label)).color(env.views[i].color)
+        }
+        (None, Some(i)) => {
+            egui::RichText::new(format!("↻ {}", env.views[i].label)).color(env.views[i].color)
+        }
         _ => egui::RichText::new("no device"),
     };
     egui::ComboBox::from_id_salt(("pane-device", id))
@@ -281,7 +336,8 @@ fn device_picker(
                 let sel = binding == Some(env.ids[i].as_str());
                 let label = egui::RichText::new(format!("● {}", v.label)).color(v.color);
                 if ui.selectable_label(sel, label).clicked() {
-                    env.intents.push(PaneIntent::SetDevice(id, Some(env.ids[i].clone())));
+                    env.intents
+                        .push(PaneIntent::SetDevice(id, Some(env.ids[i].clone())));
                 }
             }
         })

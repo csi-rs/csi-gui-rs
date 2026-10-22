@@ -74,7 +74,10 @@ impl SimBackend {
 impl PortBackend for SimBackend {
     fn open(&self, name: &str, _baud: u32) -> io::Result<Box<dyn Link>> {
         if !is_sim_port(name) {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "not a simulated port"));
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "not a simulated port",
+            ));
         }
         Ok(Box::new(SimLink(self.device(name))))
     }
@@ -287,7 +290,8 @@ impl SimDevice {
                         self.epoch = epoch;
                     }
                     None => {
-                        self.session_id = self.session_id.wrapping_mul(2_654_435_761).wrapping_add(1);
+                        self.session_id =
+                            self.session_id.wrapping_mul(2_654_435_761).wrapping_add(1);
                         self.epoch = None;
                     }
                 }
@@ -334,7 +338,8 @@ impl SimDevice {
             self.stop("");
             return;
         }
-        let period = Duration::from_micros(1_000_000 / u64::from(self.periodicity_hz.clamp(1, 1000)));
+        let period =
+            Duration::from_micros(1_000_000 / u64::from(self.periodicity_hz.clamp(1, 1000)));
         // Cap the catch-up so a long stall doesn't flood the reader.
         let mut budget = 32;
         while self.next_frame <= now && budget > 0 {
@@ -355,8 +360,10 @@ impl SimDevice {
         let mut out = Vec::with_capacity(n_sc * 2);
         for k in 0..n_sc {
             let x = k as f32 / n_sc as f32;
-            let notch = 1.0 - 0.6 * (-((x - 0.5 - 0.3 * (t * 0.4 + dev).sin()) * 12.0).powi(2)).exp();
-            let amp = (18.0 + 8.0 * (x * 6.0 + dev).sin() + 3.0 * (t * 1.7 + x * 3.0).sin()) * notch;
+            let notch =
+                1.0 - 0.6 * (-((x - 0.5 - 0.3 * (t * 0.4 + dev).sin()) * 12.0).powi(2)).exp();
+            let amp =
+                (18.0 + 8.0 * (x * 6.0 + dev).sin() + 3.0 * (t * 1.7 + x * 3.0).sin()) * notch;
             let phase = x * 9.0 + t * 0.8 + dev;
             // Firmware order: imaginary, then real.
             out.push((amp * phase.sin()).round().clamp(-127.0, 127.0) as i8);
@@ -371,7 +378,11 @@ impl SimDevice {
         let rssi = (-48.0 - 6.0 * (t * 0.3 + self.mac[5] as f32).sin()) as i8;
         let (layout, n_sc, vendor) = if self.chip.is_c5c6() {
             (
-                if self.chip == ChipFamily::Esp32C5 { LayoutId::C5Ht20None } else { LayoutId::Unknown },
+                if self.chip == ChipFamily::Esp32C5 {
+                    LayoutId::C5Ht20None
+                } else {
+                    LayoutId::Unknown
+                },
                 57,
                 VendorRx::EspHe {
                     rate: 0,
@@ -454,7 +465,12 @@ impl SimDevice {
     }
 
     fn emit_wire(&mut self, body: Body) {
-        let env = Envelope::new(self.mac, self.session_id, SourceKind::EspVendor, self.stream_seq);
+        let env = Envelope::new(
+            self.mac,
+            self.session_id,
+            SourceKind::EspVendor,
+            self.stream_seq,
+        );
         self.stream_seq = self.stream_seq.wrapping_add(1);
         let mut buf = vec![0u8; wire::MAX_ENCODED_LEN];
         if let Ok(enc) = wire::encode_cobs(&env, &body, &mut buf) {

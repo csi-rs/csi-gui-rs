@@ -8,7 +8,7 @@
 pub mod export;
 pub mod recording;
 
-pub use export::{export_packets, import_packets, ExportFormat};
+pub use export::{ExportFormat, export_packets, import_packets};
 pub use recording::{RecordingSummary, SessionRecorder};
 
 use crate::data::PreprocessConfig;
@@ -21,8 +21,10 @@ use std::path::{Path, PathBuf};
 /// Templates compiled into the binary, as `(name, json)`. They show up in
 /// the template picker next to the user's own and can't be overwritten;
 /// saving under the same name creates a user copy that shadows them.
-pub const BUILTIN_TEMPLATES: &[(&str, &str)] =
-    &[("showcase", include_str!("../../assets/templates/showcase.json"))];
+pub const BUILTIN_TEMPLATES: &[(&str, &str)] = &[(
+    "showcase",
+    include_str!("../../assets/templates/showcase.json"),
+)];
 
 /// A saved workspace template — the tiling layout, the active
 /// preprocessing config, and the per-pane view knobs (mode toggles,
@@ -90,8 +92,7 @@ pub fn save_template(name: &str, tpl: &Template) -> std::io::Result<PathBuf> {
     let dir = crate::paths::templates_dir();
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{name}.json"));
-    let s = serde_json::to_string_pretty(tpl)
-        .map_err(std::io::Error::other)?;
+    let s = serde_json::to_string_pretty(tpl).map_err(std::io::Error::other)?;
     fs::write(&path, s)?;
     Ok(path)
 }
@@ -100,7 +101,9 @@ pub fn save_template(name: &str, tpl: &Template) -> std::io::Result<PathBuf> {
 /// shadowed, sorted by name.
 pub fn list_templates() -> Vec<TemplateEntry> {
     let mut out = Vec::new();
-    let entries = fs::read_dir(crate::paths::templates_dir()).into_iter().flatten();
+    let entries = fs::read_dir(crate::paths::templates_dir())
+        .into_iter()
+        .flatten();
     for ent in entries.flatten() {
         let path = ent.path();
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -215,4 +218,3 @@ mod showcase_template_tests {
         }
     }
 }
-

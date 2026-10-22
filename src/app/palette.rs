@@ -30,25 +30,53 @@ impl App {
             PaletteEntry::new("quit", "Quit", "Q"),
         ];
         for view in ViewType::ALL_SELECTABLE {
-            v.push(PaletteEntry::new(format!("view:{}", view.label()), format!("Pane: show {}", view.label()), ""));
+            v.push(PaletteEntry::new(
+                format!("view:{}", view.label()),
+                format!("Pane: show {}", view.label()),
+                "",
+            ));
         }
         for (i, p) in LayoutPreset::ALL.iter().enumerate() {
-            v.push(PaletteEntry::new(format!("layout:{i}"), format!("Layout: {}", p.label()), ""));
+            v.push(PaletteEntry::new(
+                format!("layout:{i}"),
+                format!("Layout: {}", p.label()),
+                "",
+            ));
         }
         for t in ThemeVariant::ALL {
-            v.push(PaletteEntry::new(format!("theme:{}", t.as_u8()), format!("Theme: {}", t.label()), ""));
+            v.push(PaletteEntry::new(
+                format!("theme:{}", t.as_u8()),
+                format!("Theme: {}", t.label()),
+                "",
+            ));
         }
         for (i, s) in self.devices.sessions.iter().enumerate() {
             let l = s.label();
-            v.push(PaletteEntry::new(format!("select:{i}"), format!("Device: select {l}"), ""));
-            v.push(PaletteEntry::new(format!("bind:{i}"), format!("Pane: show device {l}"), ""));
+            v.push(PaletteEntry::new(
+                format!("select:{i}"),
+                format!("Device: select {l}"),
+                "",
+            ));
+            v.push(PaletteEntry::new(
+                format!("bind:{i}"),
+                format!("Pane: show device {l}"),
+                "",
+            ));
             if s.is_ready() {
                 let verb = if s.is_collecting() { "stop" } else { "start" };
-                v.push(PaletteEntry::new(format!("toggle:{i}"), format!("Device: {verb} {l}"), ""));
+                v.push(PaletteEntry::new(
+                    format!("toggle:{i}"),
+                    format!("Device: {verb} {l}"),
+                    "",
+                ));
             }
         }
         for p in self.devices.free_ports() {
-            v.push(PaletteEntry::new(format!("add:{}", p.name), format!("Devices: add {}", p.describe()), ""));
+            v.push(PaletteEntry::new(
+                format!("add:{}", p.name),
+                format!("Devices: add {}", p.describe()),
+                "",
+            ));
         }
         v
     }
@@ -58,7 +86,9 @@ impl App {
             return;
         }
         let entries = self.palette_entries();
-        let Some(id) = self.palette.show(ctx, &entries) else { return };
+        let Some(id) = self.palette.show(ctx, &entries) else {
+            return;
+        };
         let focused = self.tiling.focused;
         match id.as_str() {
             "run" => self.toggle_run_all(),
@@ -91,12 +121,19 @@ impl App {
                 let (kind, arg) = other.split_once(':').unwrap_or((other, ""));
                 match kind {
                     "view" => {
-                        if let Some(v) = ViewType::ALL_SELECTABLE.into_iter().find(|v| v.label() == arg) {
+                        if let Some(v) = ViewType::ALL_SELECTABLE
+                            .into_iter()
+                            .find(|v| v.label() == arg)
+                        {
                             self.tiling.set_view(v);
                         }
                     }
                     "layout" => {
-                        if let Some(p) = arg.parse::<usize>().ok().and_then(|i| LayoutPreset::ALL.get(i)) {
+                        if let Some(p) = arg
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|i| LayoutPreset::ALL.get(i))
+                        {
                             self.tiling.apply_preset(*p);
                         }
                     }
@@ -111,12 +148,21 @@ impl App {
                         }
                     }
                     "bind" => {
-                        if let Some(id) = arg.parse::<usize>().ok().and_then(|i| self.devices.sessions.get(i)).map(|s| s.id()) {
+                        if let Some(id) = arg
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|i| self.devices.sessions.get(i))
+                            .map(|s| s.id())
+                        {
                             self.view_states.get_or_default(focused).device = Some(id);
                         }
                     }
                     "toggle" => {
-                        if let Some(s) = arg.parse::<usize>().ok().and_then(|i| self.devices.sessions.get_mut(i)) {
+                        if let Some(s) = arg
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|i| self.devices.sessions.get_mut(i))
+                        {
                             if s.is_collecting() {
                                 s.stop();
                             } else {

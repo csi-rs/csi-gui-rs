@@ -18,14 +18,14 @@ use crate::protocol::command::EspCommand;
 use crate::protocol::config::{EspConfig, WifiMode};
 use crate::protocol::info::DeviceInfo;
 use crate::protocol::serialized::SessionAnnounce;
-use crate::reader::{spawn_reader_with, ConnState, ReaderEvent, ReaderHandles};
+use crate::reader::{ConnState, ReaderEvent, ReaderHandles, spawn_reader_with};
 use crate::rerun_sink::RerunSink;
 use crate::shared::EspSharedState;
 use crate::sim::MixedBackend;
 use discovery::PortCandidate;
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use store::DeviceStore;
 
@@ -177,10 +177,11 @@ impl DeviceSession {
 
     /// The board's MAC, from `info` or (native USB) the USB serial number.
     pub fn mac(&self) -> Option<String> {
-        self.info
-            .as_ref()
-            .and_then(|i| i.mac.clone())
-            .or_else(|| self.usb_serial.as_deref().and_then(discovery::normalize_mac))
+        self.info.as_ref().and_then(|i| i.mac.clone()).or_else(|| {
+            self.usb_serial
+                .as_deref()
+                .and_then(discovery::normalize_mac)
+        })
     }
 
     /// Display name: the alias, else the short port name.
@@ -188,7 +189,11 @@ impl DeviceSession {
         if !self.alias.is_empty() {
             return self.alias.clone();
         }
-        self.port.rsplit('/').next().unwrap_or(&self.port).to_string()
+        self.port
+            .rsplit('/')
+            .next()
+            .unwrap_or(&self.port)
+            .to_string()
     }
 
     /// `true` when identified and running supported firmware.
@@ -344,7 +349,10 @@ impl DeviceSession {
                 self.label()
             };
             if let Err(e) = self.recorder.start(&crate::paths::exports_dir(), &label) {
-                notices.push(Notice::Error(format!("{}: recording failed: {e}", self.label())));
+                notices.push(Notice::Error(format!(
+                    "{}: recording failed: {e}",
+                    self.label()
+                )));
             }
         } else if !want && self.recorder.is_recording() {
             if let Some(sum) = self.recorder.stop() {
@@ -355,7 +363,10 @@ impl DeviceSession {
                     sum.path.display()
                 )));
             } else if let Some(err) = self.recorder.last_error() {
-                notices.push(Notice::Error(format!("{}: recording failed: {err}", self.label())));
+                notices.push(Notice::Error(format!(
+                    "{}: recording failed: {err}",
+                    self.label()
+                )));
             }
         }
     }
@@ -441,7 +452,9 @@ impl DeviceManager {
 
     /// Index of the session with id (MAC or port) `id`.
     pub fn index_of(&self, id: &str) -> Option<usize> {
-        self.sessions.iter().position(|s| s.id() == id || s.port == id)
+        self.sessions
+            .iter()
+            .position(|s| s.id() == id || s.port == id)
     }
 
     /// `true` when `port` already has a session.
@@ -473,10 +486,11 @@ impl DeviceManager {
         // A native-USB board names itself before it answers: restore its
         // settings now so the panel shows them straight away.
         if let Some(mac) = s.mac()
-            && let Some(stored) = self.store.get(&mac) {
-                s.alias = stored.alias.clone();
-                s.cfg = stored.config.clone();
-            }
+            && let Some(stored) = self.store.get(&mac)
+        {
+            s.alias = stored.alias.clone();
+            s.cfg = stored.config.clone();
+        }
         self.sessions.push(s);
         let i = self.sessions.len() - 1;
         if self.active.is_none() {
@@ -488,7 +502,8 @@ impl DeviceManager {
     /// Add a read-only session holding an imported capture. Returns its index.
     pub fn add_imported(&mut self, name: String, packets: Vec<CsiData>) -> usize {
         let color = self.next_color();
-        self.sessions.push(DeviceSession::imported(name, packets, color));
+        self.sessions
+            .push(DeviceSession::imported(name, packets, color));
         self.sessions.len() - 1
     }
 
@@ -513,7 +528,9 @@ impl DeviceManager {
 
     /// Save session `i`'s alias and config under its MAC.
     pub fn remember(&mut self, i: usize) {
-        let Some(s) = self.sessions.get(i) else { return };
+        let Some(s) = self.sessions.get(i) else {
+            return;
+        };
         let Some(mac) = s.mac() else { return };
         if !s.live {
             return;
@@ -566,7 +583,9 @@ impl DeviceManager {
                     .ports
                     .iter()
                     .filter(|p| {
-                        p.is_likely_esp() && !self.has_port(&p.name) && !self.ignored.contains(&p.name)
+                        p.is_likely_esp()
+                            && !self.has_port(&p.name)
+                            && !self.ignored.contains(&p.name)
                     })
                     .map(|p| p.name.clone())
                     .collect();
@@ -605,7 +624,9 @@ impl DeviceManager {
     /// runs what the panel shows.
     fn on_ready(&mut self, i: usize, notices: &mut Vec<Notice>) {
         let store = &self.store;
-        let Some(s) = self.sessions.get_mut(i) else { return };
+        let Some(s) = self.sessions.get_mut(i) else {
+            return;
+        };
         if let Some(stored) = s.mac().and_then(|m| store.get(&m)) {
             if s.alias.is_empty() {
                 s.alias = stored.alias.clone();
@@ -614,22 +635,22 @@ impl DeviceManager {
                 s.cfg = stored.config.clone();
             }
         }
-        let summary = s
-            .info
-            .as_ref()
-            .map(DeviceInfo::summary)
-            .unwrap_or_default();
+        let summary = s.info.as_ref().map(DeviceInfo::summary).unwrap_or_default();
         notices.push(Notice::Info(format!("{} ready — {summary}", s.label())));
         if let Some(info) = &s.info
-            && info.protocol_outdated() {
-                notices.push(Notice::Warn(format!(
-                    "{} runs protocol {}; some settings need esp-csi-cli-rs 0.10+",
-                    s.label(),
-                    info.protocol
-                )));
-            }
+            && info.protocol_outdated()
+        {
+            notices.push(Notice::Warn(format!(
+                "{} runs protocol {}; some settings need esp-csi-cli-rs 0.10+",
+                s.label(),
+                info.protocol
+            )));
+        }
         if let Err(e) = s.apply_config() {
-            notices.push(Notice::Warn(format!("{}: config not applied: {e}", s.label())));
+            notices.push(Notice::Warn(format!(
+                "{}: config not applied: {e}",
+                s.label()
+            )));
         }
     }
 
@@ -662,9 +683,10 @@ impl DeviceManager {
             }
             if let Some(serial) = &s.usb_serial
                 && let Some(new) = discovery::find_moved(&self.ports, serial, &s.port)
-                    && !self.has_port(new) {
-                        moves.push((i, new.to_string()));
-                    }
+                && !self.has_port(new)
+            {
+                moves.push((i, new.to_string()));
+            }
         }
         for (i, new) in moves {
             let s = &mut self.sessions[i];
@@ -772,7 +794,10 @@ impl DeviceManager {
                 continue;
             }
             if !s.config_applied() {
-                notices.push(Notice::Warn(format!("{}: config not applied yet, skipped", s.label())));
+                notices.push(Notice::Warn(format!(
+                    "{}: config not applied yet, skipped",
+                    s.label()
+                )));
                 continue;
             }
             s.start(Some((id, epoch)));
@@ -836,7 +861,12 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             m.pump();
-            if m.sessions.iter().filter(|s| s.is_ready() && s.config_applied()).count() == n {
+            if m.sessions
+                .iter()
+                .filter(|s| s.is_ready() && s.config_applied())
+                .count()
+                == n
+            {
                 return;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -862,9 +892,7 @@ mod tests {
         let (id, _) = m.start_all(&targets);
         let pre = PreprocessConfig::default();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline
-            && m.sessions.iter().any(|s| s.history.entries.len() < 5)
-        {
+        while Instant::now() < deadline && m.sessions.iter().any(|s| s.history.entries.len() < 5) {
             m.pump();
             m.tick(&pre, &mut rerun);
             std::thread::sleep(Duration::from_millis(100));
@@ -877,8 +905,22 @@ mod tests {
         }
         // Different chips, different subcarrier counts: proof the
         // histories didn't mix.
-        let n0 = m.sessions[0].history.last().unwrap().csi.as_ref().unwrap().subcarriers();
-        let n1 = m.sessions[1].history.last().unwrap().csi.as_ref().unwrap().subcarriers();
+        let n0 = m.sessions[0]
+            .history
+            .last()
+            .unwrap()
+            .csi
+            .as_ref()
+            .unwrap()
+            .subcarriers();
+        let n1 = m.sessions[1]
+            .history
+            .last()
+            .unwrap()
+            .csi
+            .as_ref()
+            .unwrap()
+            .subcarriers();
         assert_ne!(n0, n1);
         m.stop_all(&targets);
         m.shutdown();

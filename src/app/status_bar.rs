@@ -26,9 +26,23 @@ impl App {
                     color: ui.visuals().text_color(),
                     ..Default::default()
                 };
-                text.append("● ", 0.0, egui::TextFormat { color: s.color, ..font.clone() });
+                text.append(
+                    "● ",
+                    0.0,
+                    egui::TextFormat {
+                        color: s.color,
+                        ..font.clone()
+                    },
+                );
                 text.append(&s.label(), 0.0, font.clone());
-                text.append(&format!("  {state}"), 0.0, egui::TextFormat { color: col, ..font.clone() });
+                text.append(
+                    &format!("  {state}"),
+                    0.0,
+                    egui::TextFormat {
+                        color: col,
+                        ..font.clone()
+                    },
+                );
                 if s.is_collecting() {
                     text.append(&format!("  {pps} pps"), 0.0, font.clone());
                 }
@@ -36,25 +50,39 @@ impl App {
                     text.append(
                         "  ●",
                         0.0,
-                        egui::TextFormat { color: egui::Color32::from_rgb(230, 70, 70), ..font.clone() },
+                        egui::TextFormat {
+                            color: egui::Color32::from_rgb(230, 70, 70),
+                            ..font.clone()
+                        },
                     );
                 }
                 let decode = s.shared.decode_rate() * 100.0;
                 let hover = format!(
                     "{}\n{}\n{:.0}% decoded · {} lost · {} dropped",
                     s.port,
-                    s.info.as_ref().map(|i| i.summary()).unwrap_or_else(|| "not identified".into()),
+                    s.info
+                        .as_ref()
+                        .map(|i| i.summary())
+                        .unwrap_or_else(|| "not identified".into()),
                     decode,
                     s.shared.frames_lost.load(Ordering::Relaxed),
                     s.shared.frames_dropped.load(Ordering::Relaxed),
                 );
-                if ui.selectable_label(active, text).on_hover_text(hover).clicked() {
+                if ui
+                    .selectable_label(active, text)
+                    .on_hover_text(hover)
+                    .clicked()
+                {
                     select = Some(i);
                 }
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("Ctrl+K commands · H help").weak().small());
+                ui.label(
+                    egui::RichText::new("Ctrl+K commands · H help")
+                        .weak()
+                        .small(),
+                );
                 #[cfg(feature = "rerun")]
                 {
                     ui.separator();
@@ -76,13 +104,20 @@ impl App {
                 if let Some(anchor) = self.replay.anchor {
                     ui.separator();
                     let resp = ui.add(
-                        egui::Button::new(egui::RichText::new("● Live").color(egui::Color32::WHITE).strong())
-                            .fill(egui::Color32::from_rgb(160, 110, 30)),
+                        egui::Button::new(
+                            egui::RichText::new("● Live")
+                                .color(egui::Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(egui::Color32::from_rgb(160, 110, 30)),
                     );
                     if resp.on_hover_text("Back to live (R)").clicked() {
                         self.go_live();
                     }
-                    ui.colored_label(egui::Color32::from_rgb(220, 180, 60), format!("replay @ {anchor}"));
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 180, 60),
+                        format!("replay @ {anchor}"),
+                    );
                 }
             });
         });
