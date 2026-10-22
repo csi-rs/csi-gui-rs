@@ -108,11 +108,10 @@ impl CommandPalette {
                     if i.key_pressed(egui::Key::ArrowUp) && !shown.is_empty() {
                         self.selected = (self.selected + shown.len() - 1) % shown.len();
                     }
-                    if i.key_pressed(egui::Key::Enter) {
-                        if let Some(e) = shown.get(self.selected) {
+                    if i.key_pressed(egui::Key::Enter)
+                        && let Some(e) = shown.get(self.selected) {
                             chosen = Some(e.id.clone());
                         }
-                    }
                     if i.key_pressed(egui::Key::Escape) {
                         close = true;
                     }

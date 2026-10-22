@@ -382,7 +382,7 @@ fn apply_denoising(packets: &mut [CsiData], mode: Denoising, params: &Preprocess
 
 fn odd_window(requested: usize, max_len: usize) -> usize {
     let mut w = requested.max(3).min(max_len);
-    if w % 2 == 0 {
+    if w.is_multiple_of(2) {
         w -= 1;
     }
     w.max(3)

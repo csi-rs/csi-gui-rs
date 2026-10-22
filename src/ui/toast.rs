@@ -69,7 +69,7 @@ impl Toasts {
                     let (accent, icon, text) = match &t.notice {
                         Notice::Info(s) => (egui::Color32::from_rgb(80, 180, 120), "●", s),
                         Notice::Warn(s) => (egui::Color32::from_rgb(220, 170, 50), "▲", s),
-                        Notice::Error(s) => (egui::Color32::from_rgb(225, 85, 85), "✖", s),
+                        Notice::Error(s) => (egui::Color32::from_rgb(225, 85, 85), "×", s),
                     };
                     let frame = egui::Frame::popup(ui.style())
                         .stroke(egui::Stroke::new(1.0_f32, accent))

@@ -521,11 +521,10 @@ fn build_connect(host: &str, port: u16) -> Result<rerun::RecordingStream, String
 
 #[cfg(feature = "rerun")]
 fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-    }
     rerun::RecordingStreamBuilder::new("csi-gui-rs")
         .save(path)
         .map_err(|e| e.to_string())
@@ -555,11 +554,10 @@ fn build_file(path: &Path) -> Result<rerun::RecordingStream, String> {
 pub fn export_history_to_rrd(histories: &[(&str, &History)], path: &Path) -> Result<(), String> {
     #[cfg(feature = "rerun")]
     {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-        }
         let rec = rerun::RecordingStreamBuilder::new("csi-gui-rs-export")
             .save(path)
             .map_err(|e| e.to_string())?;

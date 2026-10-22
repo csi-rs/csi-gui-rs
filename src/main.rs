@@ -72,6 +72,7 @@ options:
   PORT, -p PORT, --port=PORT   serial port to open (repeatable); e.g. /dev/ttyACM0, COM3
   -a, --auto-attach            open every ESP32-looking port, now and as they appear
   --simulate=N                 add N simulated esp-csi-cli-rs devices (no hardware needed)
+  --start-all                  start every device as soon as it is ready
   -b N, --baud=N               baud for UART-bridged boards (default {DEFAULT_BAUD})
   --history-size=N             plot/replay window in 100 ms ticks (default {DEFAULT_HISTORY_CAP})
   --data-dir=DIR               where exports, recordings and .rrd files go
@@ -123,6 +124,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Cli, String> {
             }
             "-p" | "--port" => app.ports.push(value(&flag)?),
             "-a" | "--auto-attach" => app.auto_attach = true,
+            "--start-all" => app.start_all = true,
             "--simulate" => app.simulate = parse_num(&value(&flag)?, "--simulate")?,
             "-b" | "--baud" => app.baud = parse_num(&value(&flag)?, "--baud")?,
             "--history-size" => {

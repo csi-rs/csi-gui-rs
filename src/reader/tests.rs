@@ -7,11 +7,10 @@ use crate::sim::SimBackend;
 fn wait_for(events: &Receiver<ReaderEvent>, mut pred: impl FnMut(&ReaderEvent) -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
-        if let Ok(ev) = events.recv_timeout(Duration::from_millis(100)) {
-            if pred(&ev) {
+        if let Ok(ev) = events.recv_timeout(Duration::from_millis(100))
+            && pred(&ev) {
                 return true;
             }
-        }
     }
     false
 }

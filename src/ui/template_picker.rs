@@ -58,19 +58,17 @@ impl TemplatePicker {
                         self.selected =
                             (self.selected + self.entries.len() - 1) % self.entries.len();
                     }
-                    if i.key_pressed(egui::Key::Enter) {
-                        if let Some(e) = self.entries.get(self.selected) {
+                    if i.key_pressed(egui::Key::Enter)
+                        && let Some(e) = self.entries.get(self.selected) {
                             if let Ok(tpl) = e.load() {
                                 result = TemplatePickerResult::Load(Box::new(tpl));
                             }
                             still_open = false;
                         }
-                    }
-                    if i.key_pressed(egui::Key::D) {
-                        if let Some(e) = self.entries.get(self.selected) {
+                    if i.key_pressed(egui::Key::D)
+                        && let Some(e) = self.entries.get(self.selected) {
                             result = TemplatePickerResult::MakeDefault(e.name.clone());
                         }
-                    }
                     if i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Q) {
                         result = TemplatePickerResult::Cancel;
                         still_open = false;

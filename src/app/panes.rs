@@ -184,33 +184,30 @@ fn render_pane(env: &mut PaneEnv<'_>, ui: &mut egui::Ui, id: usize, view: ViewTy
                     if view != ViewType::Devices && !env.views.is_empty() {
                         device_picker(env, ui, id, binding.as_deref(), bound, stale_binding);
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(env.pane_count > 1, egui::Button::new("✕").small())
-                            .on_hover_text("Close pane (Delete)")
-                            .clicked()
-                        {
-                            env.intents.push(PaneIntent::Close(id));
-                        }
-                        if ui.small_button("⛶").on_hover_text("Fullscreen (Space)").clicked() {
-                            env.intents.push(PaneIntent::Fullscreen(id));
-                        }
+                    // One menu instead of a row of icon buttons: it never
+                    // collides with the pickers in a narrow pane.
+                    ui.menu_button("☰", |ui| {
                         let can_split = env.pane_count < MAX_PANES;
-                        if ui
-                            .add_enabled(can_split, egui::Button::new("⬓").small())
-                            .on_hover_text("Split into rows (Shift+↑/↓)")
-                            .clicked()
-                        {
-                            env.intents.push(PaneIntent::Split(id, SplitDirection::Vertical));
-                        }
-                        if ui
-                            .add_enabled(can_split, egui::Button::new("◫").small())
-                            .on_hover_text("Split into columns (Shift+←/→)")
-                            .clicked()
-                        {
+                        if ui.add_enabled(can_split, egui::Button::new("Split into columns   Shift+→")).clicked() {
                             env.intents.push(PaneIntent::Split(id, SplitDirection::Horizontal));
+                            ui.close();
                         }
-                    });
+                        if ui.add_enabled(can_split, egui::Button::new("Split into rows   Shift+↓")).clicked() {
+                            env.intents.push(PaneIntent::Split(id, SplitDirection::Vertical));
+                            ui.close();
+                        }
+                        if ui.button("Fullscreen   Space").clicked() {
+                            env.intents.push(PaneIntent::Fullscreen(id));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(env.pane_count > 1, egui::Button::new("Close pane   Del")).clicked() {
+                            env.intents.push(PaneIntent::Close(id));
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Split, fullscreen or close this pane");
                 });
             });
             ui.separator();

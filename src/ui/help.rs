@@ -29,39 +29,28 @@ impl HelpOverlay {
                     });
                 }
                 ui.separator();
-                ui.label(egui::RichText::new("Panels & panes").strong());
+                ui.label(egui::RichText::new("Devices").strong());
                 ui.label(
-                    "Every pane has a header with a view dropdown and Cols / Rows / Full / × \
-                     buttons — click these to arrange the workspace instead of using the \
-                     shortcuts. View → Layouts… offers one-click preset arrangements. The \
-                     ESP control panel docks on the right; toggle it with the ▸ ESP button \
-                     in the menu bar.",
+                    "Every board in the Devices panel (D) captures at the same time. Add boards \
+                     with + Add or Auto-attach; click one to configure it. Tick boards to choose \
+                     which ones Start / Stop / Apply act on (none ticked = all). Start all (S) \
+                     gives them one shared session id so their frames line up. Boards are \
+                     remembered by MAC: alias, colour and config come back when replugged.",
                 );
                 ui.separator();
-                ui.label(egui::RichText::new("ESP devices").strong());
+                ui.label(egui::RichText::new("Panes").strong());
                 ui.label(
-                    "Connect multiple boards via + Add in the ESP panel. Click a port tab to \
-                     select the active device — plots and history follow that device (switching \
-                     clears the rolling history so streams don't mix). Use ✕ to disconnect the \
-                     selected session; its port reappears in + Add. Each device has its own \
-                     config, Start/Stop, and connection state.",
+                    "Each pane has a view picker, a device picker (↻ = follow the selected \
+                     device, ● = pinned to one) and a ☰ menu to split, fullscreen or close it. \
+                     The Devices view lists every board; Evolution → Compare devices overlays them.",
                 );
                 ui.separator();
-                ui.label(egui::RichText::new("Replay").strong());
+                ui.label(egui::RichText::new("Replay & recording").strong());
                 ui.label(
-                    "Add a Replay pane (Enter → Replay) for a scrubber, play/pause, and speed \
-                     control. While the replay anchor is set, every pane (Dashboard, Polar, \
-                     Phase, Spectrogram, CIR, I/Q density) follows it. Press R or ⏭ Live to \
-                     return everything to LIVE. Replay covers the in-memory tick window only; \
-                     full per-packet history is in the auto JSONL recording.",
-                );
-                ui.separator();
-                ui.label(egui::RichText::new("Recording").strong());
-                ui.label(
-                    "Enable \"Record to JSONL\" in the ESP panel Capture section before \
-                     Start to stream every post-preprocess packet to exports/<port>_<time>.jsonl. \
-                     RAM holds only the tick window for plots (--history-size). Stop collection \
-                     to finalize the file; use Import Data to replay a recording.",
+                    "Add a Replay pane to scrub the in-memory history; ← / → step, R returns to \
+                     live. Tick Record to write every packet of every collecting board to JSONL \
+                     in the data folder (File → Open data folder). Import opens a capture as a \
+                     read-only replay device.",
                 );
                 #[cfg(feature = "rerun")]
                 {
@@ -85,7 +74,7 @@ impl HelpOverlay {
                 ctx.input(|i| {
                     if i.key_pressed(egui::Key::Escape)
                         || i.key_pressed(egui::Key::H)
-                        || i.key_pressed(egui::Key::Q)
+                        || i.key_pressed(egui::Key::F1)
                     {
                         close = true;
                     }
@@ -98,8 +87,11 @@ impl HelpOverlay {
 }
 
 const KEYS: &[(&str, &str)] = &[
-    ("q", "Quit confirm"),
-    ("h", "Toggle this help"),
+    ("Ctrl+K", "Command palette: every action, searchable"),
+    ("s", "Start all / stop all"),
+    ("d", "Toggle the device panel"),
+    ("q", "Quit"),
+    ("h, F1", "Toggle this help"),
     ("m", "Main menu"),
     ("t", "Cycle theme"),
     ("Tab", "Focus next pane"),
@@ -108,7 +100,7 @@ const KEYS: &[(&str, &str)] = &[
     ("Enter", "Pick a view for the focused pane"),
     ("r", "Return all panes to LIVE (cancel replay)"),
     ("1..9, 0", "Focus pane by id"),
-    ("←/→", "Step replay anchor by one packet"),
+    ("←/→", "Step the replay anchor by one tick"),
     ("Shift+←/→", "Split focused pane horizontally"),
     ("Shift+↑/↓", "Split focused pane vertically"),
 ];

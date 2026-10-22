@@ -244,7 +244,7 @@ impl App {
                     .and_then(|s| s.to_str())
                     .unwrap_or("import")
                     .to_string();
-                let i = self.devices.add_imported(format!("⏵ {name}"), pkts);
+                let i = self.devices.add_imported(format!("▶ {name}"), pkts);
                 self.devices.active = Some(i);
                 self.replay.anchor = self.devices.sessions[i].history.first_id();
                 self.replay.playing = false;

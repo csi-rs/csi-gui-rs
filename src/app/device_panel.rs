@@ -191,7 +191,7 @@ impl App {
                                 ui.label(egui::RichText::new(format!("{pps} pps")).small());
                             }
                             if s.recorder.is_recording() {
-                                ui.colored_label(BAD, "⏺").on_hover_text("recording");
+                                ui.colored_label(BAD, "●").on_hover_text("recording");
                             }
                         });
                     });
@@ -394,11 +394,9 @@ impl App {
                         .add_enabled(can_apply, apply)
                         .on_disabled_hover_text("Fix the config, stop collecting, and wait for the device")
                         .clicked()
-                    {
-                        if let Err(e) = s.apply_config() {
+                        && let Err(e) = s.apply_config() {
                             notices.push(Notice::Error(e));
                         }
-                    }
                     if ui.add_enabled(!collecting, egui::Button::new("Defaults")).clicked() {
                         s.cfg = crate::protocol::config::EspConfig::default();
                         s.shared.mark_config_dirty();

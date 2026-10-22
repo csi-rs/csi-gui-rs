@@ -34,7 +34,7 @@ impl App {
                 }
                 if s.recorder.is_recording() {
                     text.append(
-                        "  ⏺",
+                        "  ●",
                         0.0,
                         egui::TextFormat { color: egui::Color32::from_rgb(230, 70, 70), ..font.clone() },
                     );
@@ -76,7 +76,7 @@ impl App {
                 if let Some(anchor) = self.replay.anchor {
                     ui.separator();
                     let resp = ui.add(
-                        egui::Button::new(egui::RichText::new("⏭ Live").color(egui::Color32::WHITE).strong())
+                        egui::Button::new(egui::RichText::new("● Live").color(egui::Color32::WHITE).strong())
                             .fill(egui::Color32::from_rgb(160, 110, 30)),
                     );
                     if resp.on_hover_text("Back to live (R)").clicked() {

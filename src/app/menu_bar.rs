@@ -213,7 +213,7 @@ impl App {
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let arrow = if self.esp_panel.open { "▸" } else { "◂" };
+                let arrow = if self.esp_panel.open { "»" } else { "«" };
                 if ui
                     .button(format!("{arrow} Devices"))
                     .on_hover_text("Toggle the device panel (D)")

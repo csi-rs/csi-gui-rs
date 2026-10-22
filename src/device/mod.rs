@@ -472,12 +472,11 @@ impl DeviceManager {
             .and_then(|p| p.serial.clone());
         // A native-USB board names itself before it answers: restore its
         // settings now so the panel shows them straight away.
-        if let Some(mac) = s.mac() {
-            if let Some(stored) = self.store.get(&mac) {
+        if let Some(mac) = s.mac()
+            && let Some(stored) = self.store.get(&mac) {
                 s.alias = stored.alias.clone();
                 s.cfg = stored.config.clone();
             }
-        }
         self.sessions.push(s);
         let i = self.sessions.len() - 1;
         if self.active.is_none() {
@@ -621,15 +620,14 @@ impl DeviceManager {
             .map(DeviceInfo::summary)
             .unwrap_or_default();
         notices.push(Notice::Info(format!("{} ready — {summary}", s.label())));
-        if let Some(info) = &s.info {
-            if info.protocol_outdated() {
+        if let Some(info) = &s.info
+            && info.protocol_outdated() {
                 notices.push(Notice::Warn(format!(
                     "{} runs protocol {}; some settings need esp-csi-cli-rs 0.10+",
                     s.label(),
                     info.protocol
                 )));
             }
-        }
         if let Err(e) = s.apply_config() {
             notices.push(Notice::Warn(format!("{}: config not applied: {e}", s.label())));
         }
@@ -662,13 +660,11 @@ impl DeviceManager {
             if count < 2 {
                 continue;
             }
-            if let Some(serial) = &s.usb_serial {
-                if let Some(new) = discovery::find_moved(&self.ports, serial, &s.port) {
-                    if !self.has_port(new) {
+            if let Some(serial) = &s.usb_serial
+                && let Some(new) = discovery::find_moved(&self.ports, serial, &s.port)
+                    && !self.has_port(new) {
                         moves.push((i, new.to_string()));
                     }
-                }
-            }
         }
         for (i, new) in moves {
             let s = &mut self.sessions[i];

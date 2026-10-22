@@ -81,6 +81,8 @@ pub struct AppOptions {
     pub auto_attach: bool,
     /// Number of simulated devices to add.
     pub simulate: usize,
+    /// Start every device once it is ready (unattended / kiosk use).
+    pub start_all: bool,
 }
 
 impl Default for AppOptions {
@@ -92,6 +94,7 @@ impl Default for AppOptions {
             ports: Vec::new(),
             auto_attach: false,
             simulate: 0,
+            start_all: false,
         }
     }
 }
@@ -153,6 +156,8 @@ pub struct App {
     should_close: bool,
 
     last_tick: Instant,
+    /// `--start-all`: start once the devices are ready (or after a timeout).
+    pending_start: Option<Instant>,
     /// What panes read when there is no device at all.
     fallback_history: History,
     fallback_shared: Arc<EspSharedState>,
@@ -221,6 +226,7 @@ impl App {
             quit_confirm_open: false,
             should_close: false,
             last_tick: Instant::now(),
+            pending_start: opts.start_all.then(Instant::now),
             fallback_history: History::with_capacity(1),
             fallback_shared: EspSharedState::handle(),
             fallback_console: Arc::new(RawConsole::new(1)),
@@ -293,6 +299,22 @@ impl App {
         self.replay.last_advance = Instant::now();
     }
 
+    /// `--start-all`: once every live device is ready with its config
+    /// applied (or 20 s have passed and at least one is), start them.
+    fn maybe_start_all(&mut self) {
+        let Some(since) = self.pending_start else { return };
+        let live: Vec<_> = self.devices.sessions.iter().filter(|s| s.live).collect();
+        let ready = live.iter().filter(|s| s.is_ready() && s.config_applied()).count();
+        let settled = !live.is_empty()
+            && live.iter().all(|s| (s.is_ready() && s.config_applied()) || s.conn_state.is_problem());
+        if settled || (ready > 0 && since.elapsed() > Duration::from_secs(20)) {
+            self.pending_start = None;
+            // Give the last config line a moment to land.
+            std::thread::sleep(Duration::from_millis(300));
+            self.toggle_run_all();
+        }
+    }
+
     /// Back to the live head.
     fn go_live(&mut self) {
         self.replay.anchor = None;
@@ -321,6 +343,7 @@ impl eframe::App for App {
             self.last_tick = Instant::now();
         }
         self.advance_replay();
+        self.maybe_start_all();
 
         self.handle_overlays(&ctx);
         self.handle_keys(&ctx);

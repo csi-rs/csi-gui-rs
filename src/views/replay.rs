@@ -40,7 +40,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
         } else {
             ui.colored_label(
                 egui::Color32::from_rgb(220, 180, 60),
-                egui::RichText::new(format!("⏵ REPLAY  packet #{anchor}")).size(16.0).strong(),
+                egui::RichText::new(format!("▶ REPLAY  packet #{anchor}")).size(16.0).strong(),
             );
         }
         ui.label(format!("({pkt_count} captured)"));
@@ -93,7 +93,7 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
             ctx.replay.playing = false;
             ctx.replay.anchor = Some(first);
         }
-        if ui.button("⏭ Live").clicked() {
+        if ui.button("● Live").clicked() {
             ctx.replay.playing = false;
             ctx.replay.anchor = None;
         }

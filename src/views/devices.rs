@@ -47,8 +47,8 @@ pub fn render(ui: &mut egui::Ui, ctx: &mut ViewCtx<'_>) {
                     let last = d.history.last();
                     ui.label(egui::RichText::new("●").color(d.color).size(16.0));
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(&d.label).strong());
-                        ui.label(egui::RichText::new(d.port).weak().small());
+                        ui.add(egui::Label::new(egui::RichText::new(&d.label).strong()).extend());
+                        ui.add(egui::Label::new(egui::RichText::new(d.port).weak().small()).extend());
                     });
                     let (col, text) = state_badge(d.state, collecting);
                     let mut r = ui.colored_label(col, text);
